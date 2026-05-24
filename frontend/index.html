@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spanish Transcription</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f0;
+      color: #1a1a1a;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 2rem;
+      font-size: 0.95rem;
+    }
+
+    .top-row {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+
+    .upload-area {
+      flex: 1;
+      background: #fff;
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      padding: 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    #file-input { display: none; }
+
+    .file-btn {
+      background: #f0f0ea;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 0.45rem 1rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-family: inherit;
+    }
+
+    .file-btn:hover { background: #e6e6e0; }
+
+    #file-name {
+      color: #555;
+      font-size: 0.9rem;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #transcribe-btn {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.55rem 1.4rem;
+      font-size: 0.95rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #transcribe-btn:hover:not(:disabled) { background: #1d4ed8; }
+    #transcribe-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Past sessions panel */
+    .sessions-panel {
+      width: 230px;
+      flex-shrink: 0;
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #e0e0da;
+      overflow: hidden;
+    }
+
+    .sessions-panel h2 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #e0e0da;
+    }
+
+    #sessions-list {
+      list-style: none;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+
+    .no-sessions {
+      padding: 1rem;
+      color: #aaa;
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    .session-item {
+      padding: 0.6rem 1rem;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f0ea;
+      transition: background 0.1s;
+    }
+
+    .session-item:last-child { border-bottom: none; }
+    .session-item:hover { background: #f5f5f0; }
+    .session-item.active { background: #eff6ff; border-left: 3px solid #2563eb; padding-left: calc(1rem - 3px); }
+
+    .session-name {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #222;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .session-date {
+      display: block;
+      font-size: 0.75rem;
+      color: #999;
+      margin-top: 0.1rem;
+    }
+
+    /* Status */
+    .status {
+      margin-top: 1.25rem;
+      font-size: 0.9rem;
+      color: #555;
+      min-height: 1.5rem;
+    }
+
+    .status.error { color: #dc2626; }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #bbb;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Results */
+    .results { margin-top: 2rem; }
+
+    .results h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      color: #333;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      font-size: 0.92rem;
+    }
+
+    th {
+      background: #f0f0ea;
+      text-align: left;
+      padding: 0.65rem 1rem;
+      font-weight: 600;
+      color: #444;
+      border-bottom: 1px solid #ddd;
+    }
+
+    td {
+      padding: 0.65rem 1rem;
+      vertical-align: top;
+      border-bottom: 1px solid #eee;
+      line-height: 1.5;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:nth-child(even) td { background: #fafaf7; }
+
+    .ts {
+      white-space: nowrap;
+      color: #888;
+      font-size: 0.82rem;
+      font-variant-numeric: tabular-nums;
+      width: 120px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Spanish Transcription</h1>
+    <p class="subtitle">Upload a Dreaming Spanish MP3 to get a timestamped Spanish + English transcript.</p>
+
+    <div class="top-row">
+      <div class="upload-area">
+        <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac" />
+        <button class="file-btn" onclick="document.getElementById('file-input').click()">
+          Choose audio file
+        </button>
+        <span id="file-name">No file selected</span>
+        <button id="transcribe-btn" disabled>Transcribe</button>
+      </div>
+
+      <div class="sessions-panel">
+        <h2>Past Sessions</h2>
+        <ul id="sessions-list">
+          <li class="no-sessions">No past sessions yet.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <div class="results" id="results" style="display:none">
+      <h2 id="results-heading"></h2>
+      <table>
+        <thead>
+          <tr>
+            <th class="ts">Timestamp</th>
+            <th>Spanish</th>
+            <th>English</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('file-input');
+    const fileName = document.getElementById('file-name');
+    const btn = document.getElementById('transcribe-btn');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+    const resultsHeading = document.getElementById('results-heading');
+    const tbody = document.getElementById('results-body');
+    const sessionsList = document.getElementById('sessions-list');
+
+    let activeSessionId = null;
+
+    // ── File picker ──────────────────────────────────────────────
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files[0];
+      fileName.textContent = f ? f.name : 'No file selected';
+      btn.disabled = !f;
+    });
+
+    // ── Transcribe ───────────────────────────────────────────────
+    btn.addEventListener('click', async () => {
+      const f = fileInput.files[0];
+      if (!f) return;
+
+      btn.disabled = true;
+      results.style.display = 'none';
+      tbody.innerHTML = '';
+      status.className = 'status';
+      status.innerHTML = '<span class="spinner"></span> Transcribing and translating — this may take several minutes for longer files…';
+
+      const form = new FormData();
+      form.append('file', f);
+
+      try {
+        const res = await fetch('/transcribe', { method: 'POST', body: form });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+          throw new Error(err.detail || `Server error ${res.status}`);
+        }
+        const data = await res.json();
+
+        if (!data.segments || data.segments.length === 0) {
+          status.textContent = 'No speech detected in the audio file.';
+          btn.disabled = false;
+          return;
+        }
+
+        renderSegments(data.segments, f.name, data.session_id);
+        await loadSessions();
+        setActiveSession(data.session_id);
+        status.textContent = '';
+      } catch (e) {
+        status.className = 'status error';
+        status.textContent = `Error: ${e.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // ── Sessions list ────────────────────────────────────────────
+    async function loadSessions() {
+      try {
+        const res = await fetch('/sessions');
+        const data = await res.json();
+        renderSessionList(data.sessions);
+      } catch (_) {}
+    }
+
+    function renderSessionList(sessions) {
+      sessionsList.innerHTML = '';
+      if (!sessions || sessions.length === 0) {
+        sessionsList.innerHTML = '<li class="no-sessions">No past sessions yet.</li>';
+        return;
+      }
+      for (const s of sessions) {
+        const li = document.createElement('li');
+        li.className = 'session-item' + (s.id === activeSessionId ? ' active' : '');
+        li.dataset.id = s.id;
+        li.innerHTML = `
+          <span class="session-name">${escHtml(s.filename)}</span>
+          <span class="session-date">${formatDate(s.transcribed_at)}</span>
+        `;
+        li.addEventListener('click', () => selectSession(s.id));
+        sessionsList.appendChild(li);
+      }
+    }
+
+    function setActiveSession(id) {
+      activeSessionId = id;
+      sessionsList.querySelectorAll('.session-item').forEach(el => {
+        el.classList.toggle('active', Number(el.dataset.id) === id);
+      });
+    }
+
+    async function selectSession(id) {
+      try {
+        const res = await fetch(`/sessions/${id}`);
+        if (!res.ok) throw new Error('Failed to load session');
+        const data = await res.json();
+        renderSegments(data.segments, data.filename, data.id);
+        setActiveSession(id);
+        status.className = 'status';
+        status.textContent = '';
+      } catch (e) {
+        status.className = 'status error';
+        status.textContent = `Error: ${e.message}`;
+      }
+    }
+
+    // ── Rendering ────────────────────────────────────────────────
+    function renderSegments(segments, filename, sessionId) {
+      tbody.innerHTML = '';
+      for (const seg of segments) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="ts">${escHtml(seg.timestamp)}</td>
+          <td>${escHtml(seg.spanish)}</td>
+          <td>${escHtml(seg.english)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+      resultsHeading.textContent = `${segments.length} segments — ${filename}`;
+      results.style.display = 'block';
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+    function formatDate(iso) {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function escHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // ── Init ─────────────────────────────────────────────────────
+    loadSessions();
+  </script>
+</body>
+</html>
