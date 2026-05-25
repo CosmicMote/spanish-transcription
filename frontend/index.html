@@ -268,6 +268,87 @@
       color: #555;
       font-style: italic;
     }
+
+    /* Vocabulary highlighting */
+    .es-word {
+      cursor: pointer;
+      border-radius: 2px;
+      transition: background 0.1s;
+    }
+    .es-word:hover { background: #fef9c3; }
+    .es-word.active { background: #fde68a; }
+
+    /* Word lookup popover */
+    .word-popover {
+      position: fixed;
+      z-index: 100;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 1rem;
+      width: 300px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+      font-size: 0.9rem;
+    }
+    .popover-close {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.6rem;
+      background: none;
+      border: none;
+      font-size: 1.1rem;
+      cursor: pointer;
+      color: #aaa;
+      line-height: 1;
+      padding: 0;
+    }
+    .popover-close:hover { color: #333; }
+    .popover-word { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.1rem; padding-right: 1.5rem; }
+    .popover-pos { font-size: 0.78rem; color: #888; font-style: italic; margin-bottom: 0.5rem; }
+    .popover-def { color: #222; margin-bottom: 0.5rem; line-height: 1.4; }
+    .popover-example {
+      font-size: 0.82rem;
+      color: #555;
+      border-top: 1px solid #eee;
+      padding-top: 0.5rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.4;
+    }
+    .popover-example em { display: block; color: #999; margin-top: 0.15rem; font-style: italic; }
+    .popover-loading { color: #aaa; font-style: italic; }
+    .popover-save-btn {
+      width: 100%;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.85rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .popover-save-btn:hover:not(:disabled) { background: #1d4ed8; }
+    .popover-save-btn.saved { background: #16a34a; cursor: default; }
+
+    /* Word list section */
+    .word-list-section { margin-top: 2rem; }
+    .word-list-section h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; color: #333; }
+    .word-count { font-size: 0.8rem; font-weight: 400; color: #888; margin-left: 0.25rem; }
+    .word-list-word { font-weight: 600; }
+    .word-list-pos { color: #888; font-style: italic; font-size: 0.85rem; }
+    .word-list-example { font-size: 0.85rem; color: #555; }
+    .word-list-example em { display: block; color: #999; font-style: italic; }
+    .remove-word-btn {
+      background: none;
+      border: none;
+      color: #ccc;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0;
+    }
+    .remove-word-btn:hover { color: #dc2626; }
   </style>
 </head>
 <body>
@@ -308,6 +389,31 @@
         <tbody id="results-body"></tbody>
       </table>
     </div>
+
+    <div class="word-list-section" id="word-list-section" style="display:none">
+      <h2>Saved Words <span id="word-count" class="word-count"></span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Word</th>
+            <th>Part of speech</th>
+            <th>Definition</th>
+            <th>Example</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="word-list-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="word-popover" class="word-popover" style="display:none">
+    <button class="popover-close" id="popover-close" aria-label="Close">×</button>
+    <div class="popover-word" id="popover-word"></div>
+    <div class="popover-pos" id="popover-pos"></div>
+    <div class="popover-def" id="popover-def"></div>
+    <div class="popover-example" id="popover-example"></div>
+    <button class="popover-save-btn" id="popover-save-btn">Save to word list</button>
   </div>
 
   <script>
@@ -426,7 +532,7 @@
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td class="ts">${escHtml(seg.timestamp)}</td>
-          <td>${escHtml(seg.spanish)}</td>
+          <td>${tokenizeSpanish(seg.spanish)}</td>
           <td>${escHtml(seg.english)}</td>
         `;
         tbody.appendChild(tr);
@@ -472,6 +578,154 @@
       </span>`;
     }
 
+    // ── Vocabulary highlighting ──────────────────────────────────
+    let savedWords = new Set();
+    let currentPopoverWord = null;
+
+    function tokenizeSpanish(text) {
+      return text.replace(/\S+/g, (token) => {
+        const m = token.match(/^([¿¡«"'(]*)([A-Za-záéíóúüñÁÉÍÓÚÜÑ][A-Za-záéíóúüñÁÉÍÓÚÜÑ']*)([.,!?;:»"')]*)/);
+        if (!m) return escHtml(token);
+        const [, pre, bare, post] = m;
+        return `${escHtml(pre)}<span class="es-word" data-word="${escHtml(bare)}" data-context="${escHtml(text)}">${escHtml(bare)}</span>${escHtml(post)}`;
+      });
+    }
+
+    document.getElementById('results-body').addEventListener('click', (e) => {
+      const span = e.target.closest('.es-word');
+      if (!span) return;
+      e.stopPropagation();
+      openWordPopover(span);
+    });
+
+    async function openWordPopover(span) {
+      const word = span.dataset.word;
+      const context = span.dataset.context;
+
+      document.querySelectorAll('.es-word.active').forEach(el => el.classList.remove('active'));
+      span.classList.add('active');
+      currentPopoverWord = null;
+
+      const pop = document.getElementById('word-popover');
+      const rect = span.getBoundingClientRect();
+      pop.style.display = 'block';
+      pop.style.top = (rect.bottom + 6) + 'px';
+      pop.style.left = Math.min(rect.left, window.innerWidth - 316) + 'px';
+
+      document.getElementById('popover-word').textContent = word;
+      document.getElementById('popover-pos').textContent = '';
+      document.getElementById('popover-def').innerHTML = '<span class="popover-loading">Looking up…</span>';
+      document.getElementById('popover-example').textContent = '';
+      updateSaveBtn(word);
+
+      try {
+        const res = await fetch('/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ word, context }),
+        });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        currentPopoverWord = { word, ...data };
+
+        document.getElementById('popover-pos').textContent = data.part_of_speech || '';
+        document.getElementById('popover-def').textContent = data.definition || '';
+        const exEl = document.getElementById('popover-example');
+        exEl.innerHTML = data.example_es
+          ? escHtml(data.example_es) + (data.example_en ? `<em>${escHtml(data.example_en)}</em>` : '')
+          : '';
+        updateSaveBtn(word);
+      } catch (_) {
+        document.getElementById('popover-def').textContent = 'Could not look up this word.';
+      }
+    }
+
+    function updateSaveBtn(word) {
+      const btn = document.getElementById('popover-save-btn');
+      const already = savedWords.has(word);
+      btn.textContent = already ? 'Saved ✓' : 'Save to word list';
+      btn.className = 'popover-save-btn' + (already ? ' saved' : '');
+      btn.disabled = already;
+    }
+
+    function closePopover() {
+      document.getElementById('word-popover').style.display = 'none';
+      document.querySelectorAll('.es-word.active').forEach(el => el.classList.remove('active'));
+      currentPopoverWord = null;
+    }
+
+    document.getElementById('popover-close').addEventListener('click', closePopover);
+
+    document.addEventListener('click', (e) => {
+      const pop = document.getElementById('word-popover');
+      if (pop.style.display !== 'none' && !pop.contains(e.target) && !e.target.closest('.es-word')) {
+        closePopover();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopover(); });
+
+    document.getElementById('popover-save-btn').addEventListener('click', async () => {
+      if (!currentPopoverWord) return;
+      const { word, part_of_speech = '', definition = '', example_es = '', example_en = '' } = currentPopoverWord;
+      try {
+        await fetch('/word-list', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ word, part_of_speech, definition, example_es, example_en }),
+        });
+        savedWords.add(word);
+        updateSaveBtn(word);
+        await loadWordList();
+      } catch (_) {}
+    });
+
+    // ── Word list ────────────────────────────────────────────────
+    async function loadWordList() {
+      try {
+        const res = await fetch('/word-list');
+        const data = await res.json();
+        savedWords = new Set(data.words.map(w => w.word));
+        renderWordList(data.words);
+      } catch (_) {}
+    }
+
+    function renderWordList(words) {
+      const section = document.getElementById('word-list-section');
+      const wlBody = document.getElementById('word-list-body');
+      const countEl = document.getElementById('word-count');
+      if (!words || words.length === 0) {
+        section.style.display = 'none';
+        return;
+      }
+      section.style.display = 'block';
+      countEl.textContent = `(${words.length})`;
+      wlBody.innerHTML = '';
+      for (const w of words) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="word-list-word">${escHtml(w.word)}</td>
+          <td class="word-list-pos">${escHtml(w.part_of_speech || '')}</td>
+          <td>${escHtml(w.definition || '')}</td>
+          <td class="word-list-example">${escHtml(w.example_es || '')}${w.example_en ? `<em>${escHtml(w.example_en)}</em>` : ''}</td>
+          <td><button class="remove-word-btn" data-word="${escHtml(w.word)}" title="Remove">×</button></td>
+        `;
+        wlBody.appendChild(tr);
+      }
+      wlBody.querySelectorAll('.remove-word-btn').forEach(btn => {
+        btn.addEventListener('click', () => removeWord(btn.dataset.word));
+      });
+    }
+
+    async function removeWord(word) {
+      try {
+        await fetch(`/word-list/${encodeURIComponent(word)}`, { method: 'DELETE' });
+        savedWords.delete(word);
+        if (currentPopoverWord && currentPopoverWord.word === word) updateSaveBtn(word);
+        await loadWordList();
+      } catch (_) {}
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
     function formatDate(iso) {
       const d = new Date(iso);
@@ -488,6 +742,7 @@
 
     // ── Init ─────────────────────────────────────────────────────
     loadSessions();
+    loadWordList();
   </script>
 </body>
 </html>

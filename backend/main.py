@@ -11,6 +11,7 @@ import whisper
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -48,6 +49,23 @@ def init_db() -> None:
             timestamp TEXT NOT NULL,
             spanish TEXT NOT NULL,
             english TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS word_list (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL UNIQUE,
+            part_of_speech TEXT DEFAULT '',
+            definition TEXT DEFAULT '',
+            example_es TEXT DEFAULT '',
+            example_en TEXT DEFAULT '',
+            added_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS word_cache (
+            word TEXT PRIMARY KEY,
+            part_of_speech TEXT DEFAULT '',
+            definition TEXT DEFAULT '',
+            example_es TEXT DEFAULT '',
+            example_en TEXT DEFAULT '',
+            cached_at TEXT NOT NULL
         );
     """)
     existing = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -211,6 +229,104 @@ async def transcribe(file: UploadFile = File(...)):
         return {"segments": output, "session_id": session_id, "cefr_level": cefr_level, "cefr_rationale": cefr_rationale}
     finally:
         os.unlink(tmp_path)
+
+
+class LookupRequest(BaseModel):
+    word: str
+    context: str = ""
+
+
+class WordSave(BaseModel):
+    word: str
+    part_of_speech: str = ""
+    definition: str = ""
+    example_es: str = ""
+    example_en: str = ""
+
+
+@app.post("/lookup")
+def lookup_word(req: LookupRequest):
+    word = req.word.lower()
+    conn = get_db()
+    cached = conn.execute(
+        "SELECT part_of_speech, definition, example_es, example_en FROM word_cache WHERE word = ?",
+        (word,),
+    ).fetchone()
+    conn.close()
+    if cached:
+        return dict(cached)
+
+    message = claude.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": (
+                f'Define the Spanish word "{word}" as used in this sentence: "{req.context}"\n\n'
+                'Reply with JSON only (no markdown):\n'
+                '{"part_of_speech": "noun", "definition": "English definition", '
+                '"example_es": "Spanish example sentence", "example_en": "English translation of example"}'
+            ),
+        }],
+    )
+    raw = message.content[0].text.strip()
+    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+    try:
+        result = json.loads(raw)
+    except Exception as e:
+        print(f"lookup_word parse error: {e!r} — raw: {raw!r}")
+        raise HTTPException(status_code=500, detail="Failed to parse lookup response")
+
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO word_cache (word, part_of_speech, definition, example_es, example_en, cached_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(word) DO NOTHING""",
+        (word, result.get("part_of_speech", ""), result.get("definition", ""),
+         result.get("example_es", ""), result.get("example_en", ""),
+         datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return result
+
+
+@app.get("/word-list")
+def get_word_list():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT word, part_of_speech, definition, example_es, example_en FROM word_list ORDER BY added_at DESC"
+    ).fetchall()
+    conn.close()
+    return {"words": [dict(r) for r in rows]}
+
+
+@app.post("/word-list")
+def save_word(entry: WordSave):
+    conn = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO word_list (word, part_of_speech, definition, example_es, example_en, added_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(word) DO UPDATE SET
+             part_of_speech=excluded.part_of_speech,
+             definition=excluded.definition,
+             example_es=excluded.example_es,
+             example_en=excluded.example_en""",
+        (entry.word, entry.part_of_speech, entry.definition, entry.example_es, entry.example_en, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/word-list/{word}")
+def delete_word(word: str):
+    conn = get_db()
+    conn.execute("DELETE FROM word_list WHERE word = ?", (word,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
