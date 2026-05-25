@@ -1,0 +1,10 @@
+backend/.venv
+backend/__pycache__
+**/__pycache__
+**/*.pyc
+*.db
+.env
+.git
+.gitignore
+.claude
+run.sh

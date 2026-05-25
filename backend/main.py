@@ -18,7 +18,7 @@ load_dotenv()
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
-DB_PATH = Path(__file__).parent.parent / "transcriptions.db"
+DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).parent.parent / "transcriptions.db")))
 BATCH_SIZE = 25
 
 app = FastAPI()
