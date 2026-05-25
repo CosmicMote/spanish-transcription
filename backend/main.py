@@ -67,6 +67,11 @@ def init_db() -> None:
             example_en TEXT DEFAULT '',
             cached_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS quiz_cache (
+            session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+            questions TEXT NOT NULL,
+            cached_at TEXT NOT NULL
+        );
     """)
     existing = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
     if "cefr_level" not in existing:
@@ -229,6 +234,57 @@ async def transcribe(file: UploadFile = File(...)):
         return {"segments": output, "session_id": session_id, "cefr_level": cefr_level, "cefr_rationale": cefr_rationale}
     finally:
         os.unlink(tmp_path)
+
+
+@app.get("/sessions/{session_id}/quiz")
+def get_quiz(session_id: int):
+    conn = get_db()
+    cached = conn.execute(
+        "SELECT questions FROM quiz_cache WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if cached:
+        conn.close()
+        return {"questions": json.loads(cached["questions"])}
+
+    segs = conn.execute(
+        "SELECT spanish FROM segments WHERE session_id = ? ORDER BY id", (session_id,)
+    ).fetchall()
+    conn.close()
+    if not segs:
+        raise HTTPException(status_code=404, detail="No segments found")
+
+    text = " ".join(r["spanish"] for r in segs)[:4000]
+    message = claude.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1000,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Based on this Spanish transcript, write 5 comprehension questions in Spanish with answers in Spanish "
+                "and an English translation of each answer. "
+                "Return JSON only (no markdown):\n"
+                '[{"question": "¿...?", "answer_es": "...", "answer_en": "..."}, ...]\n\n'
+                + text
+            ),
+        }],
+    )
+    raw = message.content[0].text.strip()
+    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+    try:
+        questions = json.loads(raw)
+    except Exception as e:
+        print(f"quiz parse error: {e!r} — raw: {raw!r}")
+        raise HTTPException(status_code=500, detail="Failed to parse quiz response")
+
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO quiz_cache (session_id, questions, cached_at) VALUES (?, ?, ?)
+           ON CONFLICT(session_id) DO NOTHING""",
+        (session_id, json.dumps(questions), datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"questions": questions}
 
 
 @app.get("/search")

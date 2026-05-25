@@ -197,7 +197,6 @@
     .results h2 {
       font-size: 1.1rem;
       font-weight: 600;
-      margin-bottom: 0.75rem;
       color: #333;
     }
 
@@ -285,6 +284,65 @@
       color: #555;
       font-style: italic;
     }
+
+    /* Quiz */
+    .results-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .results-header h2 { margin-bottom: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #quiz-btn {
+      background: #f0f0ea;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 0.3rem 0.85rem;
+      font-size: 0.85rem;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #quiz-btn:hover:not(:disabled) { background: #e6e6e0; }
+    #quiz-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #quiz-panel {
+      background: #fff;
+      border: 1px solid #e0e0da;
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
+    .quiz-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 1rem;
+    }
+    .quiz-question { margin-bottom: 1rem; }
+    .quiz-question:last-child { margin-bottom: 0; }
+    .quiz-q {
+      font-weight: 600;
+      color: #1a1a1a;
+      margin-bottom: 0.35rem;
+      line-height: 1.4;
+    }
+    .quiz-reveal-btn {
+      background: none;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 0.2rem 0.6rem;
+      font-size: 0.8rem;
+      font-family: inherit;
+      cursor: pointer;
+      color: #666;
+    }
+    .quiz-reveal-btn:hover { background: #f5f5f0; }
+    .quiz-answer { margin-top: 0.4rem; display: none; }
+    .quiz-answer-es { color: #1a1a1a; line-height: 1.4; }
+    .quiz-answer-en { color: #888; font-size: 0.85rem; font-style: italic; margin-top: 0.15rem; }
 
     /* Search */
     .search-bar {
@@ -448,7 +506,12 @@
     <div class="status" id="status"></div>
 
     <div class="results" id="results" style="display:none">
-      <h2 id="results-heading"></h2>
+      <div class="results-header">
+        <h2 id="results-heading"></h2>
+        <span id="cefr-badge-container"></span>
+        <button id="quiz-btn">Quiz me</button>
+      </div>
+      <div id="quiz-panel"></div>
       <table>
         <thead>
           <tr>
@@ -619,9 +682,60 @@
       }
     }
 
+    // ── Quiz ─────────────────────────────────────────────────────
+    const quizBtn = document.getElementById('quiz-btn');
+    const quizPanel = document.getElementById('quiz-panel');
+
+    quizBtn.addEventListener('click', async () => {
+      if (!activeSessionId) return;
+      quizBtn.disabled = true;
+      quizBtn.textContent = 'Generating…';
+      quizPanel.style.display = 'none';
+      quizPanel.innerHTML = '';
+      try {
+        const res = await fetch(`/sessions/${activeSessionId}/quiz`);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        renderQuiz(data.questions);
+      } catch (_) {
+        quizPanel.innerHTML = '<p style="color:#dc2626;font-size:0.9rem">Failed to generate questions.</p>';
+        quizPanel.style.display = 'block';
+      } finally {
+        quizBtn.disabled = false;
+        quizBtn.textContent = 'Quiz me';
+      }
+    });
+
+    function renderQuiz(questions) {
+      quizPanel.innerHTML = '<div class="quiz-title">Comprehension Questions</div>';
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const div = document.createElement('div');
+        div.className = 'quiz-question';
+        div.innerHTML = `
+          <p class="quiz-q">${i + 1}. ${escHtml(q.question)}</p>
+          <button class="quiz-reveal-btn">Show answer</button>
+          <div class="quiz-answer">
+            <div class="quiz-answer-es">${escHtml(q.answer_es || q.answer || '')}</div>
+            ${q.answer_en ? `<div class="quiz-answer-en">${escHtml(q.answer_en)}</div>` : ''}
+          </div>
+        `;
+        div.querySelector('.quiz-reveal-btn').addEventListener('click', (e) => {
+          const answer = div.querySelector('.quiz-answer');
+          const visible = answer.style.display === 'block';
+          answer.style.display = visible ? 'none' : 'block';
+          e.target.textContent = visible ? 'Show answer' : 'Hide answer';
+        });
+        quizPanel.appendChild(div);
+      }
+      quizPanel.style.display = 'block';
+    }
+
     // ── Rendering ────────────────────────────────────────────────
     function renderSegments(segments, filename, sessionId, cefrLevel, cefrRationale) {
       tbody.innerHTML = '';
+      quizPanel.style.display = 'none';
+      quizPanel.innerHTML = '';
       for (const seg of segments) {
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -631,8 +745,8 @@
         `;
         tbody.appendChild(tr);
       }
-      const badge = cefrLevel ? renderCefrBadge(cefrLevel, cefrRationale || '') : '';
-      resultsHeading.innerHTML = `${escHtml(String(segments.length))} segments — ${escHtml(filename)}${badge}`;
+      resultsHeading.textContent = `${segments.length} segments — ${filename}`;
+      document.getElementById('cefr-badge-container').innerHTML = cefrLevel ? renderCefrBadge(cefrLevel, cefrRationale || '') : '';
       results.style.display = 'block';
     }
 
