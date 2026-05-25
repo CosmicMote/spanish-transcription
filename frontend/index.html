@@ -220,6 +220,54 @@
       font-variant-numeric: tabular-nums;
       width: 120px;
     }
+
+    .cefr-badge {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 9px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: default;
+      vertical-align: middle;
+      margin-left: 0.5rem;
+    }
+
+    .cefr-badge .caret { font-size: 0.65em; opacity: 0.6; }
+
+    .cefr-tooltip {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 20;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 0.75rem;
+      width: 310px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+      font-size: 0.82rem;
+      font-weight: 400;
+      color: #333;
+      white-space: normal;
+      line-height: 1.5;
+    }
+
+    .cefr-badge:hover .cefr-tooltip { display: block; }
+
+    .cefr-tooltip table { border-collapse: collapse; width: 100%; }
+    .cefr-tooltip td { padding: 2px 4px; }
+    .cefr-tooltip td:first-child { font-weight: 700; width: 2.5rem; }
+    .cefr-tooltip .cefr-rationale {
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid #eee;
+      color: #555;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -309,7 +357,7 @@
           return;
         }
 
-        renderSegments(data.segments, f.name, data.session_id);
+        renderSegments(data.segments, f.name, data.session_id, data.cefr_level, data.cefr_rationale);
         await loadSessions();
         setActiveSession(data.session_id);
         status.textContent = '';
@@ -361,7 +409,7 @@
         const res = await fetch(`/sessions/${id}`);
         if (!res.ok) throw new Error('Failed to load session');
         const data = await res.json();
-        renderSegments(data.segments, data.filename, data.id);
+        renderSegments(data.segments, data.filename, data.id, data.cefr_level, data.cefr_rationale);
         setActiveSession(id);
         status.className = 'status';
         status.textContent = '';
@@ -372,7 +420,7 @@
     }
 
     // ── Rendering ────────────────────────────────────────────────
-    function renderSegments(segments, filename, sessionId) {
+    function renderSegments(segments, filename, sessionId, cefrLevel, cefrRationale) {
       tbody.innerHTML = '';
       for (const seg of segments) {
         const tr = document.createElement('tr');
@@ -383,8 +431,45 @@
         `;
         tbody.appendChild(tr);
       }
-      resultsHeading.textContent = `${segments.length} segments — ${filename}`;
+      const badge = cefrLevel ? renderCefrBadge(cefrLevel, cefrRationale || '') : '';
+      resultsHeading.innerHTML = `${escHtml(String(segments.length))} segments — ${escHtml(filename)}${badge}`;
       results.style.display = 'block';
+    }
+
+    function renderCefrBadge(level, rationale) {
+      const palette = {
+        A1: { bg: '#dcfce7', color: '#15803d' },
+        A2: { bg: '#bbf7d0', color: '#166534' },
+        B1: { bg: '#fef9c3', color: '#854d0e' },
+        B2: { bg: '#fde68a', color: '#92400e' },
+        C1: { bg: '#fee2e2', color: '#991b1b' },
+        C2: { bg: '#fecaca', color: '#7f1d1d' },
+      };
+      const descriptions = [
+        ['A1', '#15803d', 'Beginner — basic phrases and very simple sentences'],
+        ['A2', '#166534', 'Elementary — everyday expressions on familiar topics'],
+        ['B1', '#854d0e', 'Intermediate — clear speech on work, school, and leisure'],
+        ['B2', '#92400e', 'Upper Intermediate — complex texts and abstract topics'],
+        ['C1', '#991b1b', 'Advanced — fluent, spontaneous, and detailed expression'],
+        ['C2', '#7f1d1d', 'Mastery — virtually everything, including nuanced meaning'],
+      ];
+      const p = palette[level] || { bg: '#e5e7eb', color: '#374151' };
+      const rows = descriptions.map(([l, c, d]) =>
+        `<tr${l === level ? ' style="font-weight:800"' : ''}>
+          <td style="color:${c}">${l}</td>
+          <td>${d}</td>
+        </tr>`
+      ).join('');
+      const rationaleHtml = rationale
+        ? `<p class="cefr-rationale">${escHtml(rationale)}</p>`
+        : '';
+      return `<span class="cefr-badge" style="background:${p.bg};color:${p.color}">
+        ${escHtml(level)}<span class="caret">▾</span>
+        <div class="cefr-tooltip">
+          <table>${rows}</table>
+          ${rationaleHtml}
+        </div>
+      </span>`;
     }
 
     // ── Helpers ──────────────────────────────────────────────────

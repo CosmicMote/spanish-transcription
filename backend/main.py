@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sqlite3
@@ -49,6 +50,11 @@ def init_db() -> None:
             english TEXT NOT NULL
         );
     """)
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "cefr_level" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN cefr_level TEXT")
+    if "cefr_rationale" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN cefr_rationale TEXT")
     conn.commit()
     conn.close()
 
@@ -56,12 +62,12 @@ def init_db() -> None:
 init_db()
 
 
-def save_session(filename: str, segments: list[dict]) -> int:
+def save_session(filename: str, segments: list[dict], cefr_level: str = "", cefr_rationale: str = "") -> int:
     conn = get_db()
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
-        "INSERT INTO sessions (filename, transcribed_at) VALUES (?, ?)",
-        (filename, now),
+        "INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale) VALUES (?, ?, ?, ?)",
+        (filename, now, cefr_level, cefr_rationale),
     )
     session_id = cursor.lastrowid
     conn.executemany(
@@ -106,6 +112,35 @@ def translate_batch(spanish_texts: list[str]) -> list[str]:
     return [translations.get(i, "") for i in range(len(spanish_texts))]
 
 
+def estimate_cefr(spanish_texts: list[str]) -> tuple[str, str]:
+    sample = "\n".join(spanish_texts[:40])[:3000]
+    message = claude.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Estimate the CEFR difficulty level (A1, A2, B1, B2, C1, or C2) "
+                    "of the following Spanish transcript for a language learner. "
+                    "Consider vocabulary range, sentence complexity, and topic familiarity. "
+                    'Reply with JSON only: {"level": "B1", "rationale": "one sentence"}. '
+                    "No markdown, no extra text.\n\n" + sample
+                ),
+            }
+        ],
+    )
+    raw = message.content[0].text.strip()
+    # strip markdown code fences if present
+    raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+    try:
+        result = json.loads(raw)
+        return result.get("level", "?"), result.get("rationale", "")
+    except Exception as e:
+        print(f"estimate_cefr parse error: {e!r} — raw response: {raw!r}")
+        return "?", ""
+
+
 def translate_segments(segments: list[dict]) -> list[str]:
     texts = [seg["text"].strip() for seg in segments]
     all_translations: list[str] = []
@@ -119,7 +154,7 @@ def translate_segments(segments: list[dict]) -> list[str]:
 def list_sessions():
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, filename, transcribed_at FROM sessions ORDER BY transcribed_at DESC"
+        "SELECT id, filename, transcribed_at, cefr_level FROM sessions ORDER BY transcribed_at DESC"
     ).fetchall()
     conn.close()
     return {"sessions": [dict(r) for r in rows]}
@@ -129,7 +164,7 @@ def list_sessions():
 def get_session(session_id: int):
     conn = get_db()
     session = conn.execute(
-        "SELECT id, filename, transcribed_at FROM sessions WHERE id = ?", (session_id,)
+        "SELECT id, filename, transcribed_at, cefr_level, cefr_rationale FROM sessions WHERE id = ?", (session_id,)
     ).fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -169,8 +204,11 @@ async def transcribe(file: UploadFile = File(...)):
             for i, seg in enumerate(segments)
         ]
 
-        session_id = save_session(file.filename, output)
-        return {"segments": output, "session_id": session_id}
+        spanish_texts = [s["spanish"] for s in output]
+        cefr_level, cefr_rationale = estimate_cefr(spanish_texts)
+
+        session_id = save_session(file.filename, output, cefr_level, cefr_rationale)
+        return {"segments": output, "session_id": session_id, "cefr_level": cefr_level, "cefr_rationale": cefr_rationale}
     finally:
         os.unlink(tmp_path)
 
