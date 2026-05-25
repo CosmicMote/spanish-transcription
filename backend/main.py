@@ -231,6 +231,27 @@ async def transcribe(file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
+@app.get("/search")
+def search_segments(q: str = ""):
+    q = q.strip()
+    if not q:
+        return {"results": [], "query": q}
+    pattern = f"%{q}%"
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT seg.session_id, seg.timestamp, seg.spanish, seg.english,
+                  s.filename, s.transcribed_at
+           FROM segments seg
+           JOIN sessions s ON seg.session_id = s.id
+           WHERE LOWER(seg.spanish) LIKE LOWER(?) OR LOWER(seg.english) LIKE LOWER(?)
+           ORDER BY s.transcribed_at DESC, seg.id
+           LIMIT 200""",
+        (pattern, pattern),
+    ).fetchall()
+    conn.close()
+    return {"results": [dict(r) for r in rows], "query": q}
+
+
 @app.delete("/sessions/{session_id}")
 def delete_session(session_id: int):
     conn = get_db()

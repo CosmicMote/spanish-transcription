@@ -286,6 +286,40 @@
       font-style: italic;
     }
 
+    /* Search */
+    .search-bar {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+    #search-input {
+      flex: 1;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.92rem;
+      font-family: inherit;
+      background: #fff;
+    }
+    #search-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px #bfdbfe; }
+    #search-btn {
+      background: #f0f0ea;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      font-size: 0.92rem;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #search-btn:hover { background: #e6e6e0; }
+    .search-results-section { margin-top: 1.5rem; }
+    .search-results-section h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; color: #333; }
+    .search-result-row { cursor: pointer; }
+    .search-result-row:hover td { background: #eff6ff !important; }
+    .search-episode { font-size: 0.82rem; color: #888; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    mark { background: #fef08a; padding: 0 1px; border-radius: 2px; font-style: normal; }
+
     /* Vocabulary highlighting */
     .es-word {
       cursor: pointer;
@@ -389,6 +423,26 @@
           <li class="no-sessions">No past sessions yet.</li>
         </ul>
       </div>
+    </div>
+
+    <div class="search-bar">
+      <input type="search" id="search-input" placeholder="Search Spanish or English across all episodes…" />
+      <button id="search-btn">Search</button>
+    </div>
+
+    <div class="search-results-section" id="search-results-section" style="display:none">
+      <h2 id="search-results-heading"></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Episode</th>
+            <th class="ts">Timestamp</th>
+            <th>Spanish</th>
+            <th>English</th>
+          </tr>
+        </thead>
+        <tbody id="search-results-body"></tbody>
+      </table>
     </div>
 
     <div class="status" id="status"></div>
@@ -616,6 +670,75 @@
           ${rationaleHtml}
         </div>
       </span>`;
+    }
+
+    // ── Search ───────────────────────────────────────────────────
+    const searchInput = document.getElementById('search-input');
+    const searchBtn = document.getElementById('search-btn');
+    const searchResultsSection = document.getElementById('search-results-section');
+    const searchResultsHeading = document.getElementById('search-results-heading');
+    const searchResultsBody = document.getElementById('search-results-body');
+
+    searchBtn.addEventListener('click', performSearch);
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') performSearch(); });
+    searchInput.addEventListener('input', () => {
+      if (!searchInput.value.trim()) {
+        searchResultsSection.style.display = 'none';
+      }
+    });
+
+    async function performSearch() {
+      const q = searchInput.value.trim();
+      if (!q) { searchResultsSection.style.display = 'none'; return; }
+      searchBtn.textContent = 'Searching…';
+      searchBtn.disabled = true;
+      try {
+        const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        renderSearchResults(data.results, data.query);
+      } catch (_) {
+        searchResultsHeading.textContent = 'Search failed.';
+        searchResultsSection.style.display = 'block';
+      } finally {
+        searchBtn.textContent = 'Search';
+        searchBtn.disabled = false;
+      }
+    }
+
+    function renderSearchResults(rows, query) {
+      searchResultsBody.innerHTML = '';
+      if (!rows || rows.length === 0) {
+        searchResultsHeading.textContent = `No results for "${query}"`;
+        searchResultsSection.style.display = 'block';
+        return;
+      }
+      const capped = rows.length === 200;
+      searchResultsHeading.textContent = `${rows.length}${capped ? '+' : ''} result${rows.length !== 1 ? 's' : ''} for "${query}"`;
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.className = 'search-result-row';
+        tr.innerHTML = `
+          <td class="search-episode" title="${escHtml(r.filename)}">${escHtml(r.filename)}</td>
+          <td class="ts">${escHtml(r.timestamp)}</td>
+          <td>${highlightMatch(r.spanish, query)}</td>
+          <td>${highlightMatch(r.english, query)}</td>
+        `;
+        tr.addEventListener('click', async () => {
+          await selectSession(r.session_id);
+          results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        searchResultsBody.appendChild(tr);
+      }
+      searchResultsSection.style.display = 'block';
+    }
+
+    function highlightMatch(text, query) {
+      if (!query || !text) return escHtml(text || '');
+      const idx = text.toLowerCase().indexOf(query.toLowerCase());
+      if (idx === -1) return escHtml(text);
+      return escHtml(text.slice(0, idx))
+        + `<mark>${escHtml(text.slice(idx, idx + query.length))}</mark>`
+        + escHtml(text.slice(idx + query.length));
     }
 
     // ── Vocabulary highlighting ──────────────────────────────────
