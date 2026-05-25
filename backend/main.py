@@ -231,6 +231,19 @@ async def transcribe(file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: int):
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Session not found")
+    conn.execute("DELETE FROM segments WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 class LookupRequest(BaseModel):
     word: str
     context: str = ""
