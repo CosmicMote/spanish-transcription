@@ -561,12 +561,28 @@
     const sessionsList = document.getElementById('sessions-list');
 
     let activeSessionId = null;
+    let estimatedTranscriptionSecs = null;
 
     // ── File picker ──────────────────────────────────────────────
-    fileInput.addEventListener('change', () => {
+    fileInput.addEventListener('change', async () => {
       const f = fileInput.files[0];
       fileName.textContent = f ? f.name : 'No file selected';
       btn.disabled = !f;
+      estimatedTranscriptionSecs = null;
+      status.className = 'status';
+      status.textContent = '';
+      if (!f) return;
+
+      const dur = await getAudioDuration(f);
+      if (!dur) return;
+      try {
+        const res = await fetch(`/transcription-estimate?duration=${dur}`);
+        const data = await res.json();
+        if (data.estimated_secs !== null) {
+          estimatedTranscriptionSecs = data.estimated_secs;
+          status.textContent = `Estimated transcription time: ~${formatDuration(data.estimated_secs)} (based on ${data.based_on} past session${data.based_on !== 1 ? 's' : ''})`;
+        }
+      } catch (_) {}
     });
 
     // ── Transcribe ───────────────────────────────────────────────
@@ -578,7 +594,19 @@
       results.style.display = 'none';
       tbody.innerHTML = '';
       status.className = 'status';
-      status.innerHTML = '<span class="spinner"></span> Transcribing and translating — this may take several minutes for longer files…';
+
+      const transcribeStart = Date.now();
+      function updateTimer() {
+        const elapsed = (Date.now() - transcribeStart) / 1000;
+        let msg = `<span class="spinner"></span> Transcribing and translating… ${formatDuration(elapsed)} elapsed`;
+        if (estimatedTranscriptionSecs !== null) {
+          const remaining = Math.max(0, estimatedTranscriptionSecs - elapsed);
+          msg += ` · ~${formatDuration(remaining)} remaining`;
+        }
+        status.innerHTML = msg;
+      }
+      updateTimer();
+      const timerInterval = setInterval(updateTimer, 1000);
 
       const form = new FormData();
       form.append('file', f);
@@ -605,6 +633,7 @@
         status.className = 'status error';
         status.textContent = `Error: ${e.message}`;
       } finally {
+        clearInterval(timerInterval);
         btn.disabled = false;
       }
     });
@@ -1004,6 +1033,22 @@
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+    function getAudioDuration(file) {
+      return new Promise((resolve) => {
+        const audio = new Audio();
+        const url = URL.createObjectURL(file);
+        audio.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(audio.duration); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        audio.src = url;
+      });
+    }
+
+    function formatDuration(secs) {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    }
+
     function formatDate(iso) {
       const d = new Date(iso);
       return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });

@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,6 +79,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN cefr_level TEXT")
     if "cefr_rationale" not in existing:
         conn.execute("ALTER TABLE sessions ADD COLUMN cefr_rationale TEXT")
+    if "audio_duration_secs" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN audio_duration_secs REAL")
+    if "transcription_secs" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN transcription_secs REAL")
     conn.commit()
     conn.close()
 
@@ -85,12 +90,13 @@ def init_db() -> None:
 init_db()
 
 
-def save_session(filename: str, segments: list[dict], cefr_level: str = "", cefr_rationale: str = "") -> int:
+def save_session(filename: str, segments: list[dict], cefr_level: str = "", cefr_rationale: str = "",
+                 audio_duration_secs: float | None = None, transcription_secs: float | None = None) -> int:
     conn = get_db()
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
-        "INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale) VALUES (?, ?, ?, ?)",
-        (filename, now, cefr_level, cefr_rationale),
+        "INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs) VALUES (?, ?, ?, ?, ?, ?)",
+        (filename, now, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs),
     )
     session_id = cursor.lastrowid
     conn.executemany(
@@ -210,11 +216,14 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
+        processing_start = time.time()
         result = whisper_model.transcribe(tmp_path, language="es", task="transcribe")
         segments = result["segments"]
 
         if not segments:
             return {"segments": [], "session_id": None}
+
+        audio_duration_secs = segments[-1]["end"] if segments else None
 
         translations = translate_segments(segments)
 
@@ -229,11 +238,27 @@ async def transcribe(file: UploadFile = File(...)):
 
         spanish_texts = [s["spanish"] for s in output]
         cefr_level, cefr_rationale = estimate_cefr(spanish_texts)
+        transcription_secs = time.time() - processing_start
 
-        session_id = save_session(file.filename, output, cefr_level, cefr_rationale)
+        session_id = save_session(file.filename, output, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs)
         return {"segments": output, "session_id": session_id, "cefr_level": cefr_level, "cefr_rationale": cefr_rationale}
     finally:
         os.unlink(tmp_path)
+
+
+@app.get("/transcription-estimate")
+def get_transcription_estimate(duration: float):
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT audio_duration_secs, transcription_secs FROM sessions
+           WHERE audio_duration_secs > 0 AND transcription_secs > 0"""
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return {"estimated_secs": None, "based_on": 0}
+    ratios = [r["transcription_secs"] / r["audio_duration_secs"] for r in rows]
+    avg_ratio = sum(ratios) / len(ratios)
+    return {"estimated_secs": round(duration * avg_ratio), "based_on": len(rows)}
 
 
 @app.get("/sessions/{session_id}/quiz")
