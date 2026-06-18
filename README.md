@@ -104,7 +104,7 @@ docker build --build-arg WHISPER_MODEL=medium -t spanish-transcription .
 ### Run the container
 
 ```bash
-docker run -p 8000:8000 \
+docker run -d --restart unless-stopped -p 8000:8000 \
   -e ANTHROPIC_API_KEY=your_api_key_here \
   -v spanish_data:/data \
   spanish-transcription
@@ -121,3 +121,45 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 | `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
 | `WHISPER_MODEL` | `small` | Whisper model to use at runtime (should match the model baked in at build time) |
 | `DB_PATH` | `/data/transcriptions.db` | Path to the SQLite database file |
+
+---
+
+## Downloading audio from YouTube (Dreaming Spanish)
+
+The app accepts any mp3 file upload. If you use [Dreaming Spanish](https://www.youtube.com/@DreamingSpanish) and want to transcribe their videos, use the included `download_spanish.ps1` PowerShell script to download the audio on Windows before uploading it to the app.
+
+### Prerequisites (one-time setup)
+
+1. **Install yt-dlp**
+
+   ```powershell
+   winget install yt-dlp.yt-dlp
+   ```
+
+   Or download the standalone `.exe` from the [yt-dlp releases page](https://github.com/yt-dlp/yt-dlp/releases).
+
+2. **Log into YouTube** in Firefox with the account that has a Dreaming Spanish membership. Chrome's cookie store has security protections that prevent yt-dlp from reading it; Firefox works reliably.
+
+### Usage
+
+Find the video on the Dreaming Spanish site, click the YouTube link embedded in the player to open it on YouTube, then copy the URL and run:
+
+```powershell
+.\download_spanish.ps1 -Url "https://www.youtube.com/watch?v=..."
+```
+
+The mp3 is saved to your Downloads folder by default. Then upload it to the app as you would any audio file.
+
+**Optional parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `-Url` | *(required)* | YouTube URL of the video |
+| `-Browser` | `firefox` | Browser to read cookies from (`firefox`, `chrome`, `edge`) |
+| `-OutputDir` | `%USERPROFILE%\Downloads` | Folder to save the mp3 |
+
+Example with overrides:
+
+```powershell
+.\download_spanish.ps1 -Url "https://www.youtube.com/watch?v=..." -Browser firefox -OutputDir "C:\Users\jeff\Desktop"
+```
