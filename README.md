@@ -124,9 +124,9 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 
 ---
 
-## Downloading audio from YouTube (Dreaming Spanish)
+## Downloading audio from YouTube
 
-The app accepts any mp3 file upload. If you use [Dreaming Spanish](https://www.youtube.com/@DreamingSpanish) and want to transcribe their videos, use the included `download_spanish.ps1` PowerShell script to download the audio on Windows before uploading it to the app.
+The app accepts any mp3 file upload. If you watch Spanish-learning videos on a site that embeds a YouTube player, use the included `download_spanish.ps1` PowerShell script to download the audio on Windows before uploading it to the app.
 
 ### Prerequisites (one-time setup)
 
@@ -138,11 +138,18 @@ The app accepts any mp3 file upload. If you use [Dreaming Spanish](https://www.y
 
    Or download the standalone `.exe` from the [yt-dlp releases page](https://github.com/yt-dlp/yt-dlp/releases).
 
-2. **Log into YouTube** in Firefox with the account that has a Dreaming Spanish membership. Chrome's cookie store has security protections that prevent yt-dlp from reading it; Firefox works reliably.
+2. **Log into YouTube** in Firefox with the account that has access to the content (e.g. a membership). Chrome's cookie store has security protections that prevent yt-dlp from reading it; Firefox works reliably.
 
 ### Usage
 
-Find the video on the Dreaming Spanish site, click the YouTube link embedded in the player to open it on YouTube, then copy the URL and run:
+If the embedded player exposes a direct link to YouTube, just copy that. If it doesn't, you can still recover the URL:
+
+1. Open the page with the embedded video and open your browser's dev tools (F12) to the **Network** tab.
+2. Reload the page and let the video start loading.
+3. Filter for `embed` and look for a request like `GET https://www.youtube.com/embed/VIDEO_ID?...`.
+4. Take the `VIDEO_ID` and open `https://www.youtube.com/watch?v=VIDEO_ID` in a new tab to confirm it's the right video.
+
+Once you have the YouTube URL, run:
 
 ```powershell
 .\download_spanish.ps1 -Url "https://www.youtube.com/watch?v=..."
