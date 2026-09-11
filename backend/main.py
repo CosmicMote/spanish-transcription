@@ -10,7 +10,7 @@ from pathlib import Path
 import anthropic
 import whisper
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -21,7 +21,15 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).parent.parent / "transcriptions.db")))
 BATCH_SIZE = 25
 
+# Optional path prefix for running behind a reverse proxy that forwards the
+# full path unstripped (e.g. mounted at /spanish-transcription). Leave unset
+# to run at the root path, which is the default behavior.
+BASE_PATH = os.getenv("BASE_PATH", "").rstrip("/")
+if BASE_PATH and not BASE_PATH.startswith("/"):
+    BASE_PATH = "/" + BASE_PATH
+
 app = FastAPI()
+router = APIRouter(prefix=BASE_PATH)
 
 print(f"Loading Whisper model '{WHISPER_MODEL}'...")
 whisper_model = whisper.load_model(WHISPER_MODEL)
@@ -179,7 +187,7 @@ def translate_segments(segments: list[dict]) -> list[str]:
     return all_translations
 
 
-@app.get("/sessions")
+@router.get("/sessions")
 def list_sessions():
     conn = get_db()
     rows = conn.execute(
@@ -189,7 +197,7 @@ def list_sessions():
     return {"sessions": [dict(r) for r in rows]}
 
 
-@app.get("/sessions/{session_id}")
+@router.get("/sessions/{session_id}")
 def get_session(session_id: int):
     conn = get_db()
     session = conn.execute(
@@ -205,7 +213,7 @@ def get_session(session_id: int):
     return {**dict(session), "segments": [dict(s) for s in segs]}
 
 
-@app.post("/transcribe")
+@router.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith((".mp3", ".wav", ".m4a", ".ogg", ".flac")):
         raise HTTPException(status_code=400, detail="Please upload an audio file (mp3, wav, m4a, ogg, flac).")
@@ -246,7 +254,7 @@ async def transcribe(file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
-@app.get("/transcription-estimate")
+@router.get("/transcription-estimate")
 def get_transcription_estimate(duration: float):
     conn = get_db()
     rows = conn.execute(
@@ -261,7 +269,7 @@ def get_transcription_estimate(duration: float):
     return {"estimated_secs": round(duration * avg_ratio), "based_on": len(rows)}
 
 
-@app.get("/sessions/{session_id}/quiz")
+@router.get("/sessions/{session_id}/quiz")
 def get_quiz(session_id: int):
     conn = get_db()
     cached = conn.execute(
@@ -312,7 +320,7 @@ def get_quiz(session_id: int):
     return {"questions": questions}
 
 
-@app.get("/search")
+@router.get("/search")
 def search_segments(q: str = ""):
     q = q.strip()
     if not q:
@@ -333,7 +341,7 @@ def search_segments(q: str = ""):
     return {"results": [dict(r) for r in rows], "query": q}
 
 
-@app.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}")
 def delete_session(session_id: int):
     conn = get_db()
     if not conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
@@ -359,7 +367,7 @@ class WordSave(BaseModel):
     example_en: str = ""
 
 
-@app.post("/lookup")
+@router.post("/lookup")
 def lookup_word(req: LookupRequest):
     word = req.word.lower()
     conn = get_db()
@@ -406,7 +414,7 @@ def lookup_word(req: LookupRequest):
     return result
 
 
-@app.get("/word-list")
+@router.get("/word-list")
 def get_word_list():
     conn = get_db()
     rows = conn.execute(
@@ -416,7 +424,7 @@ def get_word_list():
     return {"words": [dict(r) for r in rows]}
 
 
-@app.post("/word-list")
+@router.post("/word-list")
 def save_word(entry: WordSave):
     conn = get_db()
     now = datetime.now(timezone.utc).isoformat()
@@ -435,7 +443,7 @@ def save_word(entry: WordSave):
     return {"ok": True}
 
 
-@app.delete("/word-list/{word}")
+@router.delete("/word-list/{word}")
 def delete_word(word: str):
     conn = get_db()
     conn.execute("DELETE FROM word_list WHERE word = ?", (word,))
@@ -444,4 +452,10 @@ def delete_word(word: str):
     return {"ok": True}
 
 
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+@router.get("/config.js")
+def config_js():
+    return Response(content=f"window.BASE_PATH = {json.dumps(BASE_PATH)};", media_type="application/javascript")
+
+
+app.include_router(router)
+app.mount(f"{BASE_PATH}/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

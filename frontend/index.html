@@ -527,6 +527,7 @@
     <button class="popover-save-btn" id="popover-save-btn">Save to word list</button>
   </div>
 
+  <script src="config.js"></script>
   <script>
     const fileInput = document.getElementById('file-input');
     const fileName = document.getElementById('file-name');
@@ -539,6 +540,10 @@
 
     let activeSessionId = null;
     let estimatedTranscriptionSecs = null;
+
+    function apiUrl(path) {
+      return (window.BASE_PATH || '') + path;
+    }
 
     // ── File picker ──────────────────────────────────────────────
     fileInput.addEventListener('change', async () => {
@@ -553,7 +558,7 @@
       const dur = await getAudioDuration(f);
       if (!dur) return;
       try {
-        const res = await fetch(`/transcription-estimate?duration=${dur}`);
+        const res = await fetch(apiUrl(`/transcription-estimate?duration=${dur}`));
         const data = await res.json();
         if (data.estimated_secs !== null) {
           estimatedTranscriptionSecs = data.estimated_secs;
@@ -589,7 +594,7 @@
       form.append('file', f);
 
       try {
-        const res = await fetch('/transcribe', { method: 'POST', body: form });
+        const res = await fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
         if (!res.ok) {
           const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
           throw new Error(err.detail || `Server error ${res.status}`);
@@ -618,7 +623,7 @@
     // ── Sessions list ────────────────────────────────────────────
     async function loadSessions() {
       try {
-        const res = await fetch('/sessions');
+        const res = await fetch(apiUrl('/sessions'));
         const data = await res.json();
         renderSessionList(data.sessions);
       } catch (_) {}
@@ -651,7 +656,7 @@
     async function deleteSession(id, filename) {
       if (!confirm(`Delete "${filename}"?`)) return;
       try {
-        const res = await fetch(`/sessions/${id}`, { method: 'DELETE' });
+        const res = await fetch(apiUrl(`/sessions/${id}`), { method: 'DELETE' });
         if (!res.ok) throw new Error();
         if (activeSessionId === id) {
           activeSessionId = null;
@@ -675,7 +680,7 @@
 
     async function selectSession(id) {
       try {
-        const res = await fetch(`/sessions/${id}`);
+        const res = await fetch(apiUrl(`/sessions/${id}`));
         if (!res.ok) throw new Error('Failed to load session');
         const data = await res.json();
         renderSegments(data.segments, data.filename, data.id, data.cefr_level, data.cefr_rationale);
@@ -699,7 +704,7 @@
       quizPanel.style.display = 'none';
       quizPanel.innerHTML = '';
       try {
-        const res = await fetch(`/sessions/${activeSessionId}/quiz`);
+        const res = await fetch(apiUrl(`/sessions/${activeSessionId}/quiz`));
         if (!res.ok) throw new Error();
         const data = await res.json();
         renderQuiz(data.questions);
@@ -813,7 +818,7 @@
       searchBtn.textContent = 'Searching…';
       searchBtn.disabled = true;
       try {
-        const res = await fetch(`/search?q=${encodeURIComponent(q)}`);
+        const res = await fetch(apiUrl(`/search?q=${encodeURIComponent(q)}`));
         const data = await res.json();
         renderSearchResults(data.results, data.query);
       } catch (_) {
@@ -902,7 +907,7 @@
       updateSaveBtn(word);
 
       try {
-        const res = await fetch('/lookup', {
+        const res = await fetch(apiUrl('/lookup'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ word, context }),
@@ -952,7 +957,7 @@
       if (!currentPopoverWord) return;
       const { word, part_of_speech = '', definition = '', example_es = '', example_en = '' } = currentPopoverWord;
       try {
-        await fetch('/word-list', {
+        await fetch(apiUrl('/word-list'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ word, part_of_speech, definition, example_es, example_en }),
@@ -966,7 +971,7 @@
     // ── Word list ────────────────────────────────────────────────
     async function loadWordList() {
       try {
-        const res = await fetch('/word-list');
+        const res = await fetch(apiUrl('/word-list'));
         const data = await res.json();
         savedWords = new Set(data.words.map(w => w.word));
         renderWordList(data.words);
@@ -1002,7 +1007,7 @@
 
     async function removeWord(word) {
       try {
-        await fetch(`/word-list/${encodeURIComponent(word)}`, { method: 'DELETE' });
+        await fetch(apiUrl(`/word-list/${encodeURIComponent(word)}`), { method: 'DELETE' });
         savedWords.delete(word);
         if (currentPopoverWord && currentPopoverWord.word === word) updateSaveBtn(word);
         await loadWordList();

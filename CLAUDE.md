@@ -15,6 +15,7 @@ just plain old HTML+JavaScript+CSS.
 - Configuration: Set `ANTHROPIC_API_KEY` environment variable with Anthropic API key for translation
 - Configuration: Set `WHISPER_MODEL` to tiny, base, small, medium, large (optional, defaults to small)
 - Configuration: Set `DB_PATH` for location of SQLite DB file (optional, can generally be left to default)
+- Configuration: Set `BASE_PATH` to run the app under a URL path prefix, e.g. behind a reverse proxy at `/spanish-transcription` (optional, defaults to running at the root path)
 - Run locally: `uvicorn backend.main:app --reload --port 8000`
 - Nothing needed to run frontend since it's just served by the FastAPI server
 

@@ -78,6 +78,16 @@ WHISPER_MODEL=medium uvicorn backend.main:app --reload --port 8000
 
 Available models (larger = more accurate but slower): `tiny`, `base`, `small`, `medium`, `large`.
 
+### Running behind a reverse proxy under a URL path
+
+By default the app runs at the root path (`/`). To host it under a path prefix behind a reverse proxy (e.g. `https://example.com/spanish-transcription`), set the `BASE_PATH` environment variable and configure your reverse proxy to forward the full path unstripped (i.e. requests to `/spanish-transcription/...` should reach the app as `/spanish-transcription/...`, not have the prefix stripped):
+
+```bash
+BASE_PATH=/spanish-transcription uvicorn backend.main:app --reload --port 8000
+```
+
+Then access the app at `http://localhost:8000/spanish-transcription`.
+
 ---
 
 ## Running with Docker
@@ -121,6 +131,7 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 | `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
 | `WHISPER_MODEL` | `small` | Whisper model to use at runtime (should match the model baked in at build time) |
 | `DB_PATH` | `/data/transcriptions.db` | Path to the SQLite database file |
+| `BASE_PATH` | *(none)* | URL path prefix to run the app under, e.g. `/spanish-transcription` (see [above](#running-behind-a-reverse-proxy-under-a-url-path)) |
 
 ---
 
