@@ -38,7 +38,9 @@ whisper_model = whisper.load_model(WHISPER_MODEL)
 print("Whisper model loaded.")
 
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+# `or` (not a getenv default) so an empty value, e.g. from docker compose's
+# ${VAR:-}, also falls back.
+DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST") or "http://localhost:11434"
 # Used when the Anthropic models API can't be reached (e.g. no API key yet).
 FALLBACK_ANTHROPIC_MODELS = [
     {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
