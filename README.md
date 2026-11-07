@@ -137,36 +137,66 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 
 ## Downloading audio from YouTube
 
-The app accepts any mp3 file upload. If you watch Spanish-learning videos on a site that embeds a YouTube player, use the included `download_spanish.ps1` PowerShell script to download the audio on Windows before uploading it to the app.
+The app accepts any mp3 file upload. If you watch Spanish-learning videos on a site that embeds a YouTube player, use one of the included scripts to download the audio before uploading it to the app:
+
+- `download_spanish.sh` — macOS (and Linux)
+- `download_spanish.ps1` — Windows (PowerShell)
 
 ### Prerequisites (one-time setup)
 
-1. **Install yt-dlp**
+1. **Install yt-dlp and ffmpeg** (yt-dlp uses ffmpeg to convert the audio to mp3)
+
+   macOS ([Homebrew](https://brew.sh)):
+
+   ```bash
+   brew install yt-dlp ffmpeg
+   ```
+
+   Windows:
 
    ```powershell
    winget install yt-dlp.yt-dlp
    ```
 
-   Or download the standalone `.exe` from the [yt-dlp releases page](https://github.com/yt-dlp/yt-dlp/releases).
+   Or download the standalone binary from the [yt-dlp releases page](https://github.com/yt-dlp/yt-dlp/releases).
 
-2. **Log into YouTube** in Firefox with the account that has access to the content (e.g. a membership). Chrome's cookie store has security protections that prevent yt-dlp from reading it; Firefox works reliably.
+2. **Log into YouTube** in Firefox with the account that has access to the content (e.g. a membership). Firefox works reliably on all platforms. On Windows, Chrome's cookie store has security protections that prevent yt-dlp from reading it. On macOS, Chrome generally works but will prompt for Keychain access the first time, and Safari requires granting your terminal Full Disk Access.
 
-### Usage
+### Finding the YouTube URL
 
 If the embedded player exposes a direct link to YouTube, just copy that. If it doesn't, you can still recover the URL:
 
-1. Open the page with the embedded video and open your browser's dev tools (F12) to the **Network** tab.
+1. Open the page with the embedded video and open your browser's dev tools (F12, or Cmd+Option+I on macOS) to the **Network** tab.
 2. Reload the page and let the video start loading.
 3. Filter for `embed` and look for a request like `GET https://www.youtube.com/embed/VIDEO_ID?...`.
 4. Take the `VIDEO_ID` and open `https://www.youtube.com/watch?v=VIDEO_ID` in a new tab to confirm it's the right video.
 
-Once you have the YouTube URL, run:
+Once you have the URL, run the script for your platform. The mp3 is saved to your Downloads folder by default; then upload it to the app as you would any audio file.
+
+### Usage on macOS
+
+```bash
+./download_spanish.sh "https://www.youtube.com/watch?v=..."
+```
+
+**Optional flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `-b` | `firefox` | Browser to read cookies from (`firefox`, `chrome`, `safari`, ...) |
+| `-o` | `~/Downloads` | Folder to save the mp3 |
+
+Example with overrides:
+
+```bash
+./download_spanish.sh -b chrome -o ~/Desktop "https://www.youtube.com/watch?v=..."
+```
+
+### Usage on Windows
 
 ```powershell
 .\download_spanish.ps1 -Url "https://www.youtube.com/watch?v=..."
 ```
-
-The mp3 is saved to your Downloads folder by default. Then upload it to the app as you would any audio file.
 
 **Optional parameters:**
 
