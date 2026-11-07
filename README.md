@@ -2,7 +2,7 @@
 
 A web app for transcribing Spanish audio files into timestamped bilingual transcripts, with vocabulary tools and comprehension features for language learners.
 
-Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/whisper) (no transcription API costs), and English translations are generated via the Anthropic API (Claude Haiku).
+Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/whisper) (no transcription API costs), and English translations and other AI features use either the Anthropic API (Claude Haiku by default) or a local model served by [Ollama](https://ollama.com), selectable in the app.
 
 ## Features
 
@@ -13,6 +13,7 @@ Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/wh
 - **Comprehension questions** — Generate 5 Spanish comprehension questions for any episode with a "Quiz me" button; questions are cached per session
 - **Full-text search** — Search across all saved transcripts in both Spanish and English
 - **Past sessions** — Browse and reload any previously transcribed episode; delete sessions you no longer need
+- **Configurable AI model** — Click the ⚙ button in the header to pick an Anthropic model, or point the app at an Ollama host and pick any model it has installed; the choice is saved in the database
 - **Transcription time estimates** — After the first session, the app estimates how long a new transcription will take based on the audio duration and past timing data
 
 ## Tech stack
@@ -21,7 +22,7 @@ Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/wh
 |---|---|
 | Backend | Python, FastAPI |
 | Transcription | OpenAI Whisper (runs locally) |
-| Translation / AI | Anthropic Claude Haiku |
+| Translation / AI | Anthropic Claude (any model) or Ollama (local models) |
 | Frontend | Vanilla HTML, CSS, JavaScript |
 | Database | SQLite |
 
@@ -33,7 +34,7 @@ Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/wh
 
 - Python 3.12
 - `ffmpeg` installed on your system (required by Whisper for audio decoding)
-- An Anthropic API key
+- An Anthropic API key, or an [Ollama](https://ollama.com) server with at least one model pulled
 
 ### Setup
 
@@ -78,6 +79,15 @@ WHISPER_MODEL=medium uvicorn backend.main:app --reload --port 8000
 
 Available models (larger = more accurate but slower): `tiny`, `base`, `small`, `medium`, `large`.
 
+### AI model
+
+By default the app uses Claude Haiku via the Anthropic API. To change it, click the ⚙ button in the header:
+
+- **Anthropic** — choose any model available to your API key.
+- **Ollama (local)** — enter the Ollama host URL (e.g. `http://localhost:11434`), click **Load models**, and choose one of the models installed on that host.
+
+Local models are slower and their JSON output can be less reliable than Claude's, so word lookups, CEFR ratings, and quizzes may occasionally fail with smaller models.
+
 ### Running behind a reverse proxy under a URL path
 
 By default the app runs at the root path (`/`). To host it under a path prefix behind a reverse proxy (e.g. `https://example.com/spanish-transcription`), set the `BASE_PATH` environment variable and configure your reverse proxy to forward the full path unstripped (i.e. requests to `/spanish-transcription/...` should reach the app as `/spanish-transcription/...`, not have the prefix stripped):
@@ -95,7 +105,7 @@ Then access the app at `http://localhost:8000/spanish-transcription`.
 ### Prerequisites
 
 - Docker installed
-- An Anthropic API key
+- An Anthropic API key, or an [Ollama](https://ollama.com) server with at least one model pulled
 
 ### Build the image
 
@@ -128,7 +138,8 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 
 | Variable | Default | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
+| `ANTHROPIC_API_KEY` | *(none)* | Your Anthropic API key (required when using Anthropic models) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Initial Ollama host shown in the AI settings dialog. From inside Docker, use `http://host.docker.internal:11434` to reach Ollama on the host machine |
 | `WHISPER_MODEL` | `small` | Whisper model to use at runtime (should match the model baked in at build time) |
 | `DB_PATH` | `/data/transcriptions.db` | Path to the SQLite database file |
 | `BASE_PATH` | *(none)* | URL path prefix to run the app under, e.g. `/spanish-transcription` (see [above](#running-behind-a-reverse-proxy-under-a-url-path)) |

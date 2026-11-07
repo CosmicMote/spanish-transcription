@@ -7,12 +7,14 @@ side by side. Other features include showing definitions of spanish
 words and saving past sessions.
 
 The tech stack on the BE is FastAPI using OpenAI's Whisper (local model) for transcription
-and the claude APIs for translation. The tech stack on the FE is very minimal,
+and either the Claude APIs or a local Ollama server for translation and other AI tasks
+(selected at runtime in the UI's AI settings dialog, stored in the `settings` table). The tech stack on the FE is very minimal,
 just plain old HTML+JavaScript+CSS.
 
 ## Commands
 - Set up virtual environment: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
-- Configuration: Set `ANTHROPIC_API_KEY` environment variable with Anthropic API key for translation
+- Configuration: Set `ANTHROPIC_API_KEY` environment variable with Anthropic API key (needed when the Anthropic provider is selected)
+- Configuration: Set `OLLAMA_HOST` for the default Ollama host in the AI settings dialog (optional, defaults to http://localhost:11434)
 - Configuration: Set `WHISPER_MODEL` to tiny, base, small, medium, large (optional, defaults to small)
 - Configuration: Set `DB_PATH` for location of SQLite DB file (optional, can generally be left to default)
 - Configuration: Set `BASE_PATH` to run the app under a URL path prefix, e.g. behind a reverse proxy at `/spanish-transcription` (optional, defaults to running at the root path)
@@ -35,6 +37,7 @@ No tests currently.
 ## Architecture notes
 - Backend is a simple FastAPI server using a SQLite database for storing past sessions.
 - Use OpenAI local whisper model for transcription to reduce cost
+- All LLM calls go through `complete()` in `backend/main.py`, which dispatches to Anthropic or Ollama (Ollama via stdlib `urllib`, no extra dependency)
 - Frontend is a single file containing all HTML+CSS+JavaScript
 - Key architectural driver is simplicity at this point
 

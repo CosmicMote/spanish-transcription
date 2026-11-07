@@ -430,6 +430,72 @@
       transition: color 0.1s;
     }
     .remove-word-btn:hover { color: #dc2626; }
+    /* ── AI settings ──────────────────────────────────────────── */
+    .settings-btn {
+      margin-left: auto;
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 7px;
+      padding: 0.35rem 0.75rem;
+      color: #fff; font-family: inherit; font-size: 0.82rem; font-weight: 500;
+      cursor: pointer; max-width: 50%;
+      transition: background 0.15s;
+    }
+    .settings-btn:hover { background: rgba(255,255,255,0.24); }
+    #ai-model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    #settings-dialog {
+      border: 1px solid #e8d5c4;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: min(440px, calc(100vw - 2rem));
+      background: #fff9f5;
+      color: #2d1a0e;
+      box-shadow: 0 12px 40px rgba(107,56,20,0.25);
+      margin: auto;
+    }
+    #settings-dialog::backdrop { background: rgba(45,26,14,0.35); }
+    #settings-dialog h2 { font-family: 'Lora', Georgia, serif; font-size: 1.2rem; margin-bottom: 1rem; }
+    .settings-providers { display: flex; gap: 0.5rem; margin-bottom: 1.1rem; }
+    .settings-providers label {
+      flex: 1; display: flex; align-items: center; gap: 0.4rem;
+      border: 1px solid #d4a891; border-radius: 7px;
+      padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.9rem;
+      background: #f5ede6; color: #7a5c47; font-weight: 500;
+    }
+    .settings-providers label:has(input:checked) { border-color: #c0522a; background: #fde0c8; color: #2d1a0e; }
+    .settings-field { margin-bottom: 0.9rem; }
+    .settings-field > label {
+      display: block; font-size: 0.73rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: #b09080; margin-bottom: 0.3rem;
+    }
+    .settings-row { display: flex; gap: 0.5rem; }
+    #settings-dialog input[type="text"], #settings-dialog select {
+      flex: 1; min-width: 0; width: 100%;
+      border: 1px solid #e8d5c4; border-radius: 7px;
+      padding: 0.45rem 0.6rem; font-size: 0.9rem; font-family: inherit;
+      background: #fff; color: #2d1a0e;
+    }
+    #settings-dialog input[type="text"]:focus, #settings-dialog select:focus {
+      outline: none; border-color: #c0522a; box-shadow: 0 0 0 2px rgba(192,82,42,0.15);
+    }
+    .settings-secondary-btn {
+      background: #f5ede6; border: 1px solid #d4a891; border-radius: 7px;
+      padding: 0.45rem 0.9rem; font-size: 0.88rem; font-family: inherit;
+      color: #7a5c47; font-weight: 500; cursor: pointer; white-space: nowrap;
+    }
+    .settings-secondary-btn:hover:not(:disabled) { background: #ede0d6; }
+    .settings-secondary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .settings-hint { font-size: 0.8rem; color: #b09080; margin-top: 0.3rem; min-height: 1.1em; }
+    .settings-hint.error { color: #dc2626; }
+    .settings-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+    #settings-save-btn {
+      background: linear-gradient(135deg, #c0522a, #9a3d1e); color: #fff; border: none;
+      border-radius: 7px; padding: 0.45rem 1.2rem; font-size: 0.9rem;
+      font-family: inherit; font-weight: 600; cursor: pointer;
+    }
+    #settings-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -437,6 +503,9 @@
     <div class="container">
       <span class="app-icon">🎙</span>
       <h1>Spanish Transcription <span class="app-title-es">Transcripción en español</span></h1>
+      <button class="settings-btn" id="settings-btn" title="AI model settings">
+        <span aria-hidden="true">⚙</span><span id="ai-model-label">AI settings</span>
+      </button>
     </div>
   </header>
   <div class="container">
@@ -526,6 +595,45 @@
     <div class="popover-example" id="popover-example"></div>
     <button class="popover-save-btn" id="popover-save-btn">Save to word list</button>
   </div>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <h2>AI Model Settings</h2>
+      <div class="settings-providers">
+        <label><input type="radio" name="provider" value="anthropic" /> Anthropic</label>
+        <label><input type="radio" name="provider" value="ollama" /> Ollama (local)</label>
+      </div>
+
+      <div id="anthropic-settings">
+        <div class="settings-field">
+          <label for="anthropic-model">Model</label>
+          <select id="anthropic-model"></select>
+          <div class="settings-hint" id="anthropic-hint"></div>
+        </div>
+      </div>
+
+      <div id="ollama-settings">
+        <div class="settings-field">
+          <label for="ollama-host">Ollama host</label>
+          <div class="settings-row">
+            <input type="text" id="ollama-host" placeholder="http://localhost:11434" spellcheck="false" />
+            <button type="button" class="settings-secondary-btn" id="ollama-refresh-btn">Load models</button>
+          </div>
+        </div>
+        <div class="settings-field">
+          <label for="ollama-model">Model</label>
+          <select id="ollama-model"></select>
+          <div class="settings-hint" id="ollama-hint"></div>
+        </div>
+      </div>
+
+      <div class="settings-hint error" id="settings-error"></div>
+      <div class="settings-actions">
+        <button type="button" class="settings-secondary-btn" id="settings-cancel-btn">Cancel</button>
+        <button type="submit" id="settings-save-btn">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="config.js"></script>
   <script>
@@ -1044,7 +1152,153 @@
         .replace(/"/g, '&quot;');
     }
 
+    // ── AI settings ──────────────────────────────────────────────
+    const settingsDialog = document.getElementById('settings-dialog');
+    const settingsForm = document.getElementById('settings-form');
+    const anthropicModelSel = document.getElementById('anthropic-model');
+    const anthropicHint = document.getElementById('anthropic-hint');
+    const ollamaHostInput = document.getElementById('ollama-host');
+    const ollamaModelSel = document.getElementById('ollama-model');
+    const ollamaHint = document.getElementById('ollama-hint');
+    const ollamaRefreshBtn = document.getElementById('ollama-refresh-btn');
+    const settingsError = document.getElementById('settings-error');
+    const settingsSaveBtn = document.getElementById('settings-save-btn');
+    let aiSettings = null;
+
+    function setAiModelLabel(s) {
+      const label = s.provider === 'ollama'
+        ? `Ollama · ${s.ollama_model || 'no model'}`
+        : `Anthropic · ${s.anthropic_model}`;
+      document.getElementById('ai-model-label').textContent = label;
+    }
+
+    async function loadAiSettings() {
+      try {
+        const res = await fetch(apiUrl('/settings'));
+        aiSettings = await res.json();
+        setAiModelLabel(aiSettings);
+      } catch (_) {}
+    }
+
+    function selectedProvider() {
+      return settingsForm.querySelector('input[name="provider"]:checked')?.value || 'anthropic';
+    }
+
+    function updateProviderSections() {
+      const p = selectedProvider();
+      document.getElementById('anthropic-settings').style.display = p === 'anthropic' ? 'block' : 'none';
+      document.getElementById('ollama-settings').style.display = p === 'ollama' ? 'block' : 'none';
+      settingsError.textContent = '';
+    }
+
+    function fillSelect(sel, options, selected) {
+      sel.innerHTML = '';
+      // Keep the saved value selectable even if it is no longer listed.
+      if (selected && !options.some(o => o.value === selected)) {
+        options = [{ value: selected, label: `${selected} (not listed)` }, ...options];
+      }
+      for (const o of options) {
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.label;
+        sel.appendChild(opt);
+      }
+      if (selected) sel.value = selected;
+    }
+
+    async function loadAnthropicModels(selected) {
+      anthropicHint.className = 'settings-hint';
+      anthropicHint.textContent = 'Loading models…';
+      try {
+        const res = await fetch(apiUrl('/models/anthropic'));
+        const data = await res.json();
+        fillSelect(anthropicModelSel,
+          data.models.map(m => ({ value: m.id, label: m.display_name ? `${m.display_name} (${m.id})` : m.id })),
+          selected);
+        anthropicHint.textContent = data.error || '';
+      } catch (_) {
+        fillSelect(anthropicModelSel, [], selected);
+        anthropicHint.className = 'settings-hint error';
+        anthropicHint.textContent = 'Failed to load models.';
+      }
+    }
+
+    async function loadOllamaModels(selected) {
+      const host = ollamaHostInput.value.trim();
+      if (!host) {
+        fillSelect(ollamaModelSel, [], selected);
+        ollamaHint.className = 'settings-hint error';
+        ollamaHint.textContent = 'Enter the Ollama host URL.';
+        return;
+      }
+      ollamaRefreshBtn.disabled = true;
+      ollamaHint.className = 'settings-hint';
+      ollamaHint.textContent = 'Loading models…';
+      try {
+        const res = await fetch(apiUrl(`/models/ollama?host=${encodeURIComponent(host)}`));
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+        fillSelect(ollamaModelSel, data.models.map(m => ({ value: m, label: m })), selected);
+        ollamaHint.textContent = data.models.length
+          ? `${data.models.length} model${data.models.length !== 1 ? 's' : ''} available`
+          : 'No models installed on this host (use `ollama pull <model>`).';
+      } catch (e) {
+        fillSelect(ollamaModelSel, [], selected);
+        ollamaHint.className = 'settings-hint error';
+        ollamaHint.textContent = e.message;
+      } finally {
+        ollamaRefreshBtn.disabled = false;
+      }
+    }
+
+    document.getElementById('settings-btn').addEventListener('click', async () => {
+      await loadAiSettings();
+      const s = aiSettings || { provider: 'anthropic', anthropic_model: '', ollama_host: '', ollama_model: '' };
+      settingsForm.querySelector(`input[name="provider"][value="${s.provider}"]`).checked = true;
+      ollamaHostInput.value = s.ollama_host;
+      updateProviderSections();
+      settingsDialog.showModal();
+      loadAnthropicModels(s.anthropic_model);
+      loadOllamaModels(s.ollama_model);
+    });
+
+    settingsForm.querySelectorAll('input[name="provider"]').forEach(r =>
+      r.addEventListener('change', updateProviderSections));
+    ollamaRefreshBtn.addEventListener('click', () => loadOllamaModels(ollamaModelSel.value));
+    ollamaHostInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); loadOllamaModels(ollamaModelSel.value); }
+    });
+    document.getElementById('settings-cancel-btn').addEventListener('click', () => settingsDialog.close());
+
+    settingsForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      settingsError.textContent = '';
+      settingsSaveBtn.disabled = true;
+      try {
+        const res = await fetch(apiUrl('/settings'), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: selectedProvider(),
+            anthropic_model: anthropicModelSel.value || (aiSettings && aiSettings.anthropic_model) || '',
+            ollama_host: ollamaHostInput.value.trim(),
+            ollama_model: ollamaModelSel.value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+        aiSettings = data;
+        setAiModelLabel(data);
+        settingsDialog.close();
+      } catch (err) {
+        settingsError.textContent = err.message;
+      } finally {
+        settingsSaveBtn.disabled = false;
+      }
+    });
+
     // ── Init ─────────────────────────────────────────────────────
+    loadAiSettings();
     loadSessions();
     loadWordList();
   </script>
