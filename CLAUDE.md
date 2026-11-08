@@ -37,6 +37,7 @@ No tests currently.
 ## Architecture notes
 - Backend is a simple FastAPI server using a SQLite database for storing past sessions.
 - Use OpenAI local whisper model for transcription to reduce cost
+- YouTube URLs are downloaded server-side with the `yt_dlp` library (`/transcribe-url`), then go through the same `process_audio()` pipeline as file uploads. Members-only videos use a cookies.txt uploaded in Settings and stored next to the DB (`youtube_cookies.txt`). The `download_spanish.*` scripts remain as a manual alternative
 - All LLM calls go through `complete()` in `backend/main.py`, which dispatches to Anthropic or Ollama (Ollama via stdlib `urllib`, no extra dependency)
 - Frontend is a single file containing all HTML+CSS+JavaScript
 - Key architectural driver is simplicity at this point

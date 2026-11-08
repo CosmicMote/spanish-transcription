@@ -46,3 +46,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Uploaded YouTube login cookies (secrets)
+youtube_cookies.txt
+youtube_cookies.upload

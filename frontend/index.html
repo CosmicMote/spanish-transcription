@@ -61,15 +61,42 @@
     /* ── Upload area ──────────────────────────────────────────── */
     .upload-area {
       flex: 1;
+      min-width: 0;
       background: #fff9f5;
       border: 2px dashed #d4a891;
       border-radius: 12px;
-      padding: 1.75rem;
+      padding: 1.25rem 1.75rem 1.5rem;
       display: flex;
-      align-items: center;
-      gap: 1rem;
-      flex-wrap: wrap;
+      flex-direction: column;
+      gap: 0.9rem;
     }
+
+    .source-toggle { display: flex; gap: 0.4rem; }
+    .source-toggle label {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      border: 1px solid #d4a891; border-radius: 7px;
+      padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.85rem;
+      background: #f5ede6; color: #7a5c47; font-weight: 500;
+    }
+    .source-toggle input { accent-color: #c0522a; }
+    .source-toggle label:has(input:checked) { border-color: #c0522a; background: #fde0c8; color: #2d1a0e; }
+
+    .upload-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .source-panel { flex: 1; min-width: 0; display: flex; align-items: center; gap: 1rem; }
+    .source-panel[hidden] { display: none; }
+
+    #youtube-url {
+      flex: 1; min-width: 0;
+      border: 1px solid #e8d5c4; border-radius: 7px;
+      padding: 0.45rem 0.7rem; font-size: 0.9rem; font-family: inherit;
+      background: #fff; color: #2d1a0e;
+    }
+    #youtube-url::placeholder { color: #c0a090; }
+    #youtube-url:focus { outline: none; border-color: #c0522a; box-shadow: 0 0 0 2px rgba(192,82,42,0.15); }
+
+    .source-detail { font-size: 0.85rem; color: #7a5c47; min-height: 1.2em; margin-top: -0.3rem; overflow-wrap: anywhere; }
+    .source-detail:empty { display: none; }
+    .source-detail.error { color: #dc2626; }
 
     #file-input { display: none; }
 
@@ -175,6 +202,12 @@
       white-space: nowrap;
     }
     .session-date { display: block; font-size: 0.75rem; color: #b09080; margin-top: 0.1rem; }
+    .session-source { color: #c0522a; text-decoration: none; margin-left: 0.35rem; }
+    .session-source:hover { text-decoration: underline; }
+    #source-link {
+      font-size: 0.85rem; color: #c0522a; text-decoration: none; white-space: nowrap; font-weight: 500;
+    }
+    #source-link:hover { text-decoration: underline; }
 
     /* ── Status ───────────────────────────────────────────────── */
     .status { margin-top: 1.25rem; font-size: 0.9rem; color: #7a5c47; min-height: 1.5rem; }
@@ -497,6 +530,46 @@
       font-family: inherit; font-weight: 600; cursor: pointer;
     }
     #settings-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #settings-dialog h3 {
+      font-size: 0.95rem; font-weight: 700; color: #2d1a0e; margin-bottom: 0.7rem;
+    }
+    .settings-section { border-top: 1px solid #e8d5c4; margin-top: 1.1rem; padding-top: 1rem; }
+    .settings-label {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.73rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.07em; color: #b09080; margin-bottom: 0.3rem;
+    }
+    .cookies-row { align-items: center; }
+    #cookies-status { flex: 1; min-width: 0; font-size: 0.9rem; color: #2d1a0e; }
+
+    .help-tip {
+      width: 1.15rem; height: 1.15rem; border-radius: 50%;
+      border: 1px solid #d4a891; background: #f5ede6; color: #7a5c47;
+      font-size: 0.72rem; font-weight: 700; font-family: inherit; line-height: 1;
+      cursor: help; padding: 0; text-transform: none; letter-spacing: 0;
+    }
+    .help-tip:hover, .help-tip[aria-expanded="true"] { background: #fde0c8; border-color: #c0522a; color: #2d1a0e; }
+    /* position: fixed so the modal dialog's overflow can't clip it; placed by JS. */
+    .help-tooltip {
+      display: none;
+      position: fixed;
+      z-index: 50;
+      width: min(380px, calc(100vw - 16px));
+      background: #fff9f5;
+      border: 1px solid #e8d5c4;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      box-shadow: 0 8px 28px rgba(107,56,20,0.22);
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: #2d1a0e;
+    }
+    .help-tooltip p { margin-bottom: 0.45rem; }
+    .help-tooltip ol { padding-left: 1.2rem; margin-bottom: 0.45rem; }
+    .help-tooltip li { margin-bottom: 0.3rem; }
+    .help-tooltip a { color: #c0522a; }
+    .help-tooltip code { font-size: 0.78rem; background: #f5ede6; padding: 0 3px; border-radius: 3px; }
+    .help-tooltip .help-note { color: #7a5c47; font-style: italic; margin-bottom: 0; }
   </style>
 </head>
 <body>
@@ -504,22 +577,34 @@
     <div class="container">
       <span class="app-icon">🎙</span>
       <h1>Spanish Transcription <span class="app-title-es">Transcripción en español</span></h1>
-      <button class="settings-btn" id="settings-btn" title="AI model settings">
+      <button class="settings-btn" id="settings-btn" title="Settings">
         <span aria-hidden="true">⚙</span><span id="ai-model-label">AI settings</span>
       </button>
     </div>
   </header>
   <div class="container">
-    <p class="subtitle">Upload a Spanish MP3 for a timestamped bilingual transcript.</p>
+    <p class="subtitle">Upload a Spanish MP3 or paste a YouTube link for a timestamped bilingual transcript.</p>
 
     <div class="top-row">
       <div class="upload-area">
-        <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac" />
-        <button class="file-btn" onclick="document.getElementById('file-input').click()">
-          Choose audio file
-        </button>
-        <span id="file-name">No file selected</span>
-        <button id="transcribe-btn" disabled>Transcribe</button>
+        <div class="source-toggle">
+          <label><input type="radio" name="source" value="file" checked /> Audio file</label>
+          <label><input type="radio" name="source" value="youtube" /> YouTube URL</label>
+        </div>
+        <div class="upload-row">
+          <div class="source-panel" id="file-source">
+            <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac" />
+            <button class="file-btn" onclick="document.getElementById('file-input').click()">
+              Choose audio file
+            </button>
+            <span id="file-name">No file selected</span>
+          </div>
+          <div class="source-panel" id="youtube-source" hidden>
+            <input type="url" id="youtube-url" placeholder="https://www.youtube.com/watch?v=…" spellcheck="false" autocomplete="off" />
+          </div>
+          <button id="transcribe-btn" disabled>Transcribe</button>
+        </div>
+        <div class="source-detail" id="youtube-detail" hidden></div>
       </div>
 
       <div class="sessions-panel">
@@ -555,6 +640,7 @@
     <div class="results" id="results" style="display:none">
       <div class="results-header">
         <h2 id="results-heading"></h2>
+        <a id="source-link" target="_blank" rel="noopener" style="display:none">Watch on YouTube ↗</a>
         <span id="cefr-badge-container"></span>
         <button id="quiz-btn">Quiz me</button>
       </div>
@@ -599,7 +685,8 @@
 
   <dialog id="settings-dialog">
     <form id="settings-form" method="dialog">
-      <h2>AI Model Settings</h2>
+      <h2>Settings</h2>
+      <h3>AI model</h3>
       <div class="settings-providers">
         <label><input type="radio" name="provider" value="anthropic" /> Anthropic</label>
         <label><input type="radio" name="provider" value="ollama" /> Ollama (local)</label>
@@ -628,6 +715,39 @@
         </div>
       </div>
 
+      <div class="settings-section">
+        <h3>YouTube</h3>
+        <div class="settings-field">
+          <div class="settings-label">
+            Login cookies
+            <button type="button" class="help-tip" id="cookies-help-btn"
+                    aria-label="How to export cookies.txt" aria-expanded="false" aria-controls="cookies-help">?</button>
+          </div>
+          <div class="settings-row cookies-row">
+            <span id="cookies-status">Not uploaded</span>
+            <input type="file" id="cookies-input" accept=".txt,text/plain" hidden />
+            <button type="button" class="settings-secondary-btn" id="cookies-upload-btn">Upload cookies.txt</button>
+            <button type="button" class="settings-secondary-btn" id="cookies-remove-btn" style="display:none">Remove</button>
+          </div>
+          <div class="settings-hint" id="cookies-hint">Only needed for members-only or other login-required videos. Takes effect immediately.</div>
+        </div>
+        <div class="help-tooltip" id="cookies-help" role="tooltip">
+          <p><strong>Exporting YouTube cookies</strong> (one-time setup, about 2 minutes)</p>
+          <ol>
+            <li>Install a cookies.txt exporter:
+              <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" rel="noopener">cookies.txt</a> for Firefox, or
+              <a href="https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener">Get cookies.txt LOCALLY</a> for Chrome.
+              Allow it to run in private/incognito windows (in the browser's extension settings).</li>
+            <li>Open a new <strong>private/incognito window</strong> and sign in to YouTube with the account that has the membership.</li>
+            <li>In that same tab, go to <code>https://www.youtube.com/robots.txt</code>. Close any other private tabs.</li>
+            <li>Click the extension's icon and export the cookies for <code>youtube.com</code>. This saves a <code>cookies.txt</code> file.</li>
+            <li><strong>Close the private window</strong> without signing out. YouTube keeps rotating cookies in open tabs, so closing it is what keeps the exported cookies valid.</li>
+            <li>Click <em>Upload cookies.txt</em> here and choose that file.</li>
+          </ol>
+          <p class="help-note">When members-only videos start failing with a login error, repeat these steps. YouTube may restrict accounts it sees downloading, so use this sparingly.</p>
+        </div>
+      </div>
+
       <div class="settings-hint error" id="settings-error"></div>
       <div class="settings-actions">
         <button type="button" class="settings-secondary-btn" id="settings-cancel-btn">Cancel</button>
@@ -647,49 +767,129 @@
     const tbody = document.getElementById('results-body');
     const sessionsList = document.getElementById('sessions-list');
 
+    const youtubeUrlInput = document.getElementById('youtube-url');
+    const youtubeDetail = document.getElementById('youtube-detail');
+
     let activeSessionId = null;
     let estimatedTranscriptionSecs = null;
+    let sourceMode = 'file';
+    let transcribing = false;
+    let estimateSeq = 0;
+    let youtubeLookupTimer = null;
 
     function apiUrl(path) {
       return (window.BASE_PATH || '') + path;
     }
 
+    function updateTranscribeEnabled() {
+      const ready = sourceMode === 'file' ? !!fileInput.files[0] : !!youtubeUrlInput.value.trim();
+      btn.disabled = transcribing || !ready;
+    }
+
+    // Clears any shown estimate; returns a token so late async results for a
+    // previous file/URL can be discarded.
+    function resetEstimate() {
+      estimatedTranscriptionSecs = null;
+      if (!transcribing) {
+        status.className = 'status';
+        status.textContent = '';
+      }
+      return ++estimateSeq;
+    }
+
+    async function showEstimate(durationSecs, seq) {
+      if (!durationSecs) return;
+      try {
+        const res = await fetch(apiUrl(`/transcription-estimate?duration=${durationSecs}`));
+        const data = await res.json();
+        if (seq !== estimateSeq || transcribing || data.estimated_secs === null) return;
+        estimatedTranscriptionSecs = data.estimated_secs;
+        status.textContent = `Estimated transcription time: ~${formatDuration(data.estimated_secs)} (based on ${data.based_on} past session${data.based_on !== 1 ? 's' : ''})`;
+      } catch (_) {}
+    }
+
+    // ── Source toggle ────────────────────────────────────────────
+    document.querySelectorAll('input[name="source"]').forEach(r => r.addEventListener('change', () => {
+      sourceMode = document.querySelector('input[name="source"]:checked').value;
+      document.getElementById('file-source').hidden = sourceMode !== 'file';
+      document.getElementById('youtube-source').hidden = sourceMode !== 'youtube';
+      youtubeDetail.hidden = sourceMode !== 'youtube';
+      updateTranscribeEnabled();
+      if (sourceMode === 'file') {
+        estimateForFile();
+      } else {
+        lookupYoutube();
+        youtubeUrlInput.focus();
+      }
+    }));
+
     // ── File picker ──────────────────────────────────────────────
-    fileInput.addEventListener('change', async () => {
+    async function estimateForFile() {
+      const seq = resetEstimate();
+      const f = fileInput.files[0];
+      if (!f) return;
+      showEstimate(await getAudioDuration(f), seq);
+    }
+
+    fileInput.addEventListener('change', () => {
       const f = fileInput.files[0];
       fileName.textContent = f ? f.name : 'No file selected';
-      btn.disabled = !f;
-      estimatedTranscriptionSecs = null;
-      status.className = 'status';
-      status.textContent = '';
-      if (!f) return;
-
-      const dur = await getAudioDuration(f);
-      if (!dur) return;
-      try {
-        const res = await fetch(apiUrl(`/transcription-estimate?duration=${dur}`));
-        const data = await res.json();
-        if (data.estimated_secs !== null) {
-          estimatedTranscriptionSecs = data.estimated_secs;
-          status.textContent = `Estimated transcription time: ~${formatDuration(data.estimated_secs)} (based on ${data.based_on} past session${data.based_on !== 1 ? 's' : ''})`;
-        }
-      } catch (_) {}
+      updateTranscribeEnabled();
+      estimateForFile();
     });
+
+    // ── YouTube URL ──────────────────────────────────────────────
+    youtubeUrlInput.addEventListener('input', () => {
+      updateTranscribeEnabled();
+      clearTimeout(youtubeLookupTimer);
+      youtubeLookupTimer = setTimeout(lookupYoutube, 600);
+    });
+    youtubeUrlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !btn.disabled) btn.click();
+    });
+
+    async function lookupYoutube() {
+      clearTimeout(youtubeLookupTimer);
+      const seq = resetEstimate();
+      const url = youtubeUrlInput.value.trim();
+      youtubeDetail.className = 'source-detail';
+      if (!url) { youtubeDetail.textContent = ''; return; }
+      youtubeDetail.innerHTML = '<span class="spinner"></span> Looking up video…';
+      try {
+        const res = await fetch(apiUrl(`/youtube-info?url=${encodeURIComponent(url)}`));
+        const data = await res.json().catch(() => ({}));
+        if (seq !== estimateSeq) return;
+        if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+        const parts = [data.title];
+        if (data.channel) parts.push(data.channel);
+        if (data.duration) parts.push(formatDuration(data.duration));
+        youtubeDetail.textContent = parts.join(' · ');
+        showEstimate(data.duration, seq);
+      } catch (e) {
+        if (seq !== estimateSeq) return;
+        youtubeDetail.className = 'source-detail error';
+        youtubeDetail.textContent = e.message;
+      }
+    }
 
     // ── Transcribe ───────────────────────────────────────────────
     btn.addEventListener('click', async () => {
       const f = fileInput.files[0];
-      if (!f) return;
+      const ytUrl = youtubeUrlInput.value.trim();
+      const fromYoutube = sourceMode === 'youtube';
+      if (fromYoutube ? !ytUrl : !f) return;
 
-      btn.disabled = true;
+      transcribing = true;
+      updateTranscribeEnabled();
       results.style.display = 'none';
       tbody.innerHTML = '';
       status.className = 'status';
 
+      const action = fromYoutube ? 'Downloading, transcribing, and translating…' : 'Transcribing and translating…';
       const transcribeStart = Date.now();
       function updateTimer() {
         const elapsed = (Date.now() - transcribeStart) / 1000;
-        let msg = `<span class="spinner"></span> Transcribing and translating… ${formatDuration(elapsed)} elapsed`;
+        let msg = `<span class="spinner"></span> ${action} ${formatDuration(elapsed)} elapsed`;
         if (estimatedTranscriptionSecs !== null) {
           const remaining = Math.max(0, estimatedTranscriptionSecs - elapsed);
           msg += ` · ~${formatDuration(remaining)} remaining`;
@@ -699,11 +899,21 @@
       updateTimer();
       const timerInterval = setInterval(updateTimer, 1000);
 
-      const form = new FormData();
-      form.append('file', f);
+      let request;
+      if (fromYoutube) {
+        request = fetch(apiUrl('/transcribe-url'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: ytUrl }),
+        });
+      } else {
+        const form = new FormData();
+        form.append('file', f);
+        request = fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
+      }
 
       try {
-        const res = await fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
+        const res = await request;
         if (!res.ok) {
           const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
           throw new Error(err.detail || `Server error ${res.status}`);
@@ -711,12 +921,12 @@
         const data = await res.json();
 
         if (!data.segments || data.segments.length === 0) {
-          status.textContent = 'No speech detected in the audio file.';
-          btn.disabled = false;
+          status.textContent = 'No speech detected in the audio.';
           return;
         }
 
-        renderSegments(data.segments, f.name, data.session_id, data.cefr_level, data.cefr_rationale);
+        renderSegments(data.segments, data.filename || (f && f.name) || ytUrl, data.session_id,
+                       data.cefr_level, data.cefr_rationale, data.source_url);
         await loadSessions();
         setActiveSession(data.session_id);
         status.textContent = '';
@@ -725,7 +935,8 @@
         status.textContent = `Error: ${e.message}`;
       } finally {
         clearInterval(timerInterval);
-        btn.disabled = false;
+        transcribing = false;
+        updateTranscribeEnabled();
       }
     });
 
@@ -748,11 +959,15 @@
         const li = document.createElement('li');
         li.className = 'session-item' + (s.id === activeSessionId ? ' active' : '');
         li.dataset.id = s.id;
+        const sourceUrl = safeUrl(s.source_url);
         li.innerHTML = `
-          <span class="session-name">${escHtml(s.filename)}</span>
-          <span class="session-date">${formatDate(s.transcribed_at)}</span>
+          <span class="session-name" title="${escHtml(s.filename)}">${escHtml(s.filename)}</span>
+          <span class="session-date">${formatDate(s.transcribed_at)}${sourceUrl
+            ? `<a class="session-source" href="${escHtml(sourceUrl)}" target="_blank" rel="noopener" title="Open on YouTube">▶ YouTube</a>`
+            : ''}</span>
           <button class="delete-session-btn" title="Delete session">×</button>
         `;
+        li.querySelector('.session-source')?.addEventListener('click', (e) => e.stopPropagation());
         li.querySelector('.delete-session-btn').addEventListener('click', (e) => {
           e.stopPropagation();
           deleteSession(s.id, s.filename);
@@ -792,7 +1007,7 @@
         const res = await fetch(apiUrl(`/sessions/${id}`));
         if (!res.ok) throw new Error('Failed to load session');
         const data = await res.json();
-        renderSegments(data.segments, data.filename, data.id, data.cefr_level, data.cefr_rationale);
+        renderSegments(data.segments, data.filename, data.id, data.cefr_level, data.cefr_rationale, data.source_url);
         setActiveSession(id);
         status.className = 'status';
         status.textContent = '';
@@ -852,7 +1067,11 @@
     }
 
     // ── Rendering ────────────────────────────────────────────────
-    function renderSegments(segments, filename, sessionId, cefrLevel, cefrRationale) {
+    function renderSegments(segments, filename, sessionId, cefrLevel, cefrRationale, sourceUrl) {
+      const sourceLink = document.getElementById('source-link');
+      const safeSource = safeUrl(sourceUrl);
+      sourceLink.style.display = safeSource ? '' : 'none';
+      if (safeSource) sourceLink.href = safeSource; else sourceLink.removeAttribute('href');
       tbody.innerHTML = '';
       quizPanel.style.display = 'none';
       quizPanel.innerHTML = '';
@@ -1145,6 +1364,11 @@
       return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
+    // Only allow http(s) links, so a stored URL can never become javascript:.
+    function safeUrl(url) {
+      return url && /^https?:\/\//i.test(url) ? url : '';
+    }
+
     function escHtml(str) {
       return String(str)
         .replace(/&/g, '&amp;')
@@ -1261,6 +1485,7 @@
       settingsDialog.showModal();
       loadAnthropicModels(s.anthropic_model);
       loadOllamaModels(s.ollama_model);
+      loadCookiesStatus();
     });
 
     settingsForm.querySelectorAll('input[name="provider"]').forEach(r =>
@@ -1297,6 +1522,120 @@
         settingsSaveBtn.disabled = false;
       }
     });
+
+    // ── YouTube cookies ──────────────────────────────────────────
+    // Upload/remove apply immediately; they aren't part of the Save button.
+    const cookiesStatusEl = document.getElementById('cookies-status');
+    const cookiesInput = document.getElementById('cookies-input');
+    const cookiesUploadBtn = document.getElementById('cookies-upload-btn');
+    const cookiesRemoveBtn = document.getElementById('cookies-remove-btn');
+    const cookiesHint = document.getElementById('cookies-hint');
+    const cookiesHintDefault = cookiesHint.textContent;
+
+    function renderCookiesStatus(s) {
+      cookiesStatusEl.textContent = s.uploaded
+        ? (s.uploaded_at ? `Uploaded ${formatDate(s.uploaded_at)}` : 'Uploaded')
+        : 'Not uploaded';
+      cookiesUploadBtn.textContent = s.uploaded ? 'Replace…' : 'Upload cookies.txt';
+      cookiesRemoveBtn.style.display = s.uploaded ? '' : 'none';
+    }
+
+    function setCookiesHint(text, isError = false) {
+      cookiesHint.className = 'settings-hint' + (isError ? ' error' : '');
+      cookiesHint.textContent = text;
+    }
+
+    async function loadCookiesStatus() {
+      setCookiesHint(cookiesHintDefault);
+      try {
+        const res = await fetch(apiUrl('/youtube-cookies'));
+        renderCookiesStatus(await res.json());
+      } catch (_) {
+        cookiesStatusEl.textContent = 'Unknown';
+      }
+    }
+
+    async function sendCookiesRequest(options, successMsg) {
+      cookiesUploadBtn.disabled = cookiesRemoveBtn.disabled = true;
+      try {
+        const res = await fetch(apiUrl('/youtube-cookies'), options);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+        renderCookiesStatus(data);
+        setCookiesHint(successMsg);
+      } catch (e) {
+        setCookiesHint(e.message, true);
+      } finally {
+        cookiesUploadBtn.disabled = cookiesRemoveBtn.disabled = false;
+      }
+    }
+
+    cookiesUploadBtn.addEventListener('click', () => cookiesInput.click());
+    cookiesInput.addEventListener('change', async () => {
+      const f = cookiesInput.files[0];
+      if (!f) return;
+      const form = new FormData();
+      form.append('file', f);
+      await sendCookiesRequest({ method: 'PUT', body: form }, 'Cookies saved. Members-only videos should now work.');
+      cookiesInput.value = '';
+    });
+    cookiesRemoveBtn.addEventListener('click', () => {
+      if (!confirm('Remove the uploaded YouTube cookies?')) return;
+      sendCookiesRequest({ method: 'DELETE' }, 'Cookies removed.');
+    });
+
+    // Help tooltip: shows on hover/focus, click pins it open so the links are
+    // usable. position: fixed keeps the dialog's scroll area from clipping it.
+    const cookiesHelpBtn = document.getElementById('cookies-help-btn');
+    const cookiesHelp = document.getElementById('cookies-help');
+    let cookiesHelpPinned = false;
+    let cookiesHelpTimer = null;
+
+    function showCookiesHelp() {
+      clearTimeout(cookiesHelpTimer);
+      cookiesHelp.style.display = 'block';
+      const r = cookiesHelpBtn.getBoundingClientRect();
+      const w = cookiesHelp.offsetWidth;
+      const h = cookiesHelp.offsetHeight;
+      const left = Math.min(Math.max(8, r.left - 16), window.innerWidth - w - 8);
+      let top = r.bottom + 8;
+      if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 8);
+      cookiesHelp.style.left = `${left}px`;
+      cookiesHelp.style.top = `${top}px`;
+      cookiesHelpBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function hideCookiesHelp() {
+      clearTimeout(cookiesHelpTimer);
+      cookiesHelpPinned = false;
+      cookiesHelp.style.display = 'none';
+      cookiesHelpBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    function hideCookiesHelpSoon() {
+      clearTimeout(cookiesHelpTimer);
+      cookiesHelpTimer = setTimeout(() => {
+        if (cookiesHelpPinned || cookiesHelp.matches(':hover') || cookiesHelpBtn.matches(':hover')
+            || cookiesHelp.contains(document.activeElement)) return;
+        hideCookiesHelp();
+      }, 250);
+    }
+
+    cookiesHelpBtn.addEventListener('mouseenter', showCookiesHelp);
+    cookiesHelpBtn.addEventListener('focus', showCookiesHelp);
+    cookiesHelpBtn.addEventListener('mouseleave', hideCookiesHelpSoon);
+    cookiesHelpBtn.addEventListener('blur', hideCookiesHelpSoon);
+    cookiesHelp.addEventListener('mouseenter', () => clearTimeout(cookiesHelpTimer));
+    cookiesHelp.addEventListener('mouseleave', hideCookiesHelpSoon);
+    cookiesHelpBtn.addEventListener('click', () => {
+      if (cookiesHelpPinned) { hideCookiesHelp(); return; }
+      cookiesHelpPinned = true;
+      showCookiesHelp();
+    });
+    settingsDialog.addEventListener('click', (e) => {
+      if (cookiesHelpPinned && !cookiesHelp.contains(e.target) && e.target !== cookiesHelpBtn) hideCookiesHelp();
+    });
+    settingsDialog.addEventListener('close', hideCookiesHelp);
 
     // ── Init ─────────────────────────────────────────────────────
     loadAiSettings();

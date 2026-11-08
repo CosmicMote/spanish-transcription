@@ -7,6 +7,7 @@ Audio is transcribed locally using [OpenAI Whisper](https://github.com/openai/wh
 ## Features
 
 - **Bilingual transcripts** — Timestamped table of Spanish segments alongside English translations
+- **YouTube links** — Paste a YouTube URL instead of uploading a file, including members-only videos once you upload your login cookies (see [Transcribing YouTube videos](#transcribing-youtube-videos))
 - **CEFR difficulty rating** — Each episode is automatically rated A1–C2 with a rationale; hover the badge for a description of each level
 - **Vocabulary lookup** — Click any Spanish word in the transcript to see its definition, part of speech, and an example sentence; lookups are cached in the database so each word is only sent to the API once
 - **Saved word list** — Save looked-up words to a persistent personal vocabulary list
@@ -146,9 +147,36 @@ The `-v spanish_data:/data` flag mounts a Docker volume so that your transcripti
 
 ---
 
-## Downloading audio from YouTube
+## Transcribing YouTube videos
 
-The app accepts any mp3 file upload. If you watch Spanish-learning videos on a site that embeds a YouTube player, use one of the included scripts to download the audio before uploading it to the app:
+Choose **YouTube URL** above the Transcribe button and paste a video link (`youtube.com/watch?v=…` or `youtu.be/…`). The app shows the video's title and length, plus an estimated transcription time. When you click Transcribe, the server downloads the audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and transcribes it. The session is named after the video, and **▶ YouTube** links in Past Sessions and the transcript header take you back to it.
+
+Only single videos are supported; playlists and live streams are rejected. yt-dlp, the YouTube challenge-solver scripts, and the Deno JavaScript runtime it needs are all installed from `backend/requirements.txt`, so no extra system packages are required beyond ffmpeg. YouTube changes often. If downloads start failing for every video, update yt-dlp (`pip install -U "yt-dlp[default,deno]"`, or rebuild the Docker image).
+
+### Members-only videos (cookies)
+
+Public videos work as-is. Members-only, age-restricted, and other login-required videos need your YouTube login cookies. These are uploaded once in the app:
+
+1. Click ⚙ in the header, then go to **YouTube → Login cookies**. Hover the **?** for step-by-step export instructions.
+2. Following those steps, export a `cookies.txt` from a **private/incognito window** with the [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) extension (Firefox) or [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) (Chrome). Then close the window. YouTube rotates cookies in open browser tabs, so cookies exported this way last much longer. The procedure comes from the [yt-dlp wiki](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies).
+3. Click **Upload cookies.txt**.
+
+The file is validated, then stored as `youtube_cookies.txt` next to the database (`/data` in Docker). It's used for every YouTube download. If a video fails with a "YouTube login required" error, the cookies have expired: export and upload a fresh file. Because the file lives on the server, this works even when the app runs on a different machine from your browser.
+
+### Finding the YouTube URL
+
+If the embedded player exposes a direct link to YouTube, just copy that. If it doesn't, you can still recover the URL:
+
+1. Open the page with the embedded video and open your browser's dev tools (F12, or Cmd+Option+I on macOS) to the **Network** tab.
+2. Reload the page and let the video start loading.
+3. Filter for `embed` and look for a request like `GET https://www.youtube.com/embed/VIDEO_ID?...`.
+4. Take the `VIDEO_ID` and open `https://www.youtube.com/watch?v=VIDEO_ID` in a new tab to confirm it's the right video.
+
+---
+
+## Downloading audio with the scripts (alternative)
+
+If you'd rather download the mp3 yourself (for example, to keep a copy), the included scripts still work. Upload the result as you would any audio file:
 
 - `download_spanish.sh` — macOS (and Linux)
 - `download_spanish.ps1` — Windows (PowerShell)
@@ -173,16 +201,7 @@ The app accepts any mp3 file upload. If you watch Spanish-learning videos on a s
 
 2. **Log into YouTube** in Firefox with the account that has access to the content (e.g. a membership). Firefox works reliably on all platforms. On Windows, Chrome's cookie store has security protections that prevent yt-dlp from reading it. On macOS, Chrome generally works but will prompt for Keychain access the first time, and Safari requires granting your terminal Full Disk Access.
 
-### Finding the YouTube URL
-
-If the embedded player exposes a direct link to YouTube, just copy that. If it doesn't, you can still recover the URL:
-
-1. Open the page with the embedded video and open your browser's dev tools (F12, or Cmd+Option+I on macOS) to the **Network** tab.
-2. Reload the page and let the video start loading.
-3. Filter for `embed` and look for a request like `GET https://www.youtube.com/embed/VIDEO_ID?...`.
-4. Take the `VIDEO_ID` and open `https://www.youtube.com/watch?v=VIDEO_ID` in a new tab to confirm it's the right video.
-
-Once you have the URL, run the script for your platform. The mp3 is saved to your Downloads folder by default; then upload it to the app as you would any audio file.
+Once you have the URL ([how to find it](#finding-the-youtube-url)), run the script for your platform. The mp3 is saved to your Downloads folder by default; then upload it to the app as you would any audio file.
 
 ### Usage on macOS
 

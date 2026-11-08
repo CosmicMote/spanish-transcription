@@ -5,12 +5,14 @@ import sqlite3
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import anthropic
 import whisper
+import yt_dlp
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,9 @@ load_dotenv()
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).parent.parent / "transcriptions.db")))
+# Uploaded YouTube login cookies live next to the DB (i.e. in /data under Docker).
+YOUTUBE_COOKIES_PATH = DB_PATH.parent / "youtube_cookies.txt"
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
 BATCH_SIZE = 25
 
 # Optional path prefix for running behind a reverse proxy that forwards the
@@ -119,6 +124,8 @@ def init_db() -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN audio_duration_secs REAL")
     if "transcription_secs" not in existing:
         conn.execute("ALTER TABLE sessions ADD COLUMN transcription_secs REAL")
+    if "source_url" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN source_url TEXT")
     conn.commit()
     conn.close()
 
@@ -214,12 +221,15 @@ def strip_code_fences(raw: str) -> str:
 
 
 def save_session(filename: str, segments: list[dict], cefr_level: str = "", cefr_rationale: str = "",
-                 audio_duration_secs: float | None = None, transcription_secs: float | None = None) -> int:
+                 audio_duration_secs: float | None = None, transcription_secs: float | None = None,
+                 source_url: str | None = None) -> int:
     conn = get_db()
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
-        "INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs) VALUES (?, ?, ?, ?, ?, ?)",
-        (filename, now, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs),
+        """INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale,
+                                 audio_duration_secs, transcription_secs, source_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (filename, now, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs, source_url),
     )
     session_id = cursor.lastrowid
     conn.executemany(
@@ -280,11 +290,202 @@ def translate_segments(segments: list[dict]) -> list[str]:
     return all_translations
 
 
+def process_audio(audio_path: str, display_name: str, source_url: str | None = None) -> dict:
+    """Transcribe, translate, grade, and save an audio file as a new session."""
+    processing_start = time.time()
+    result = whisper_model.transcribe(audio_path, language="es", task="transcribe")
+    segments = result["segments"]
+
+    if not segments:
+        return {"segments": [], "session_id": None}
+
+    audio_duration_secs = segments[-1]["end"]
+
+    translations = translate_segments(segments)
+
+    output = [
+        {
+            "timestamp": f"{format_timestamp(seg['start'])} – {format_timestamp(seg['end'])}",
+            "spanish": seg["text"].strip(),
+            "english": translations[i],
+        }
+        for i, seg in enumerate(segments)
+    ]
+
+    spanish_texts = [s["spanish"] for s in output]
+    cefr_level, cefr_rationale = estimate_cefr(spanish_texts)
+    transcription_secs = time.time() - processing_start
+
+    session_id = save_session(display_name, output, cefr_level, cefr_rationale,
+                              audio_duration_secs, transcription_secs, source_url)
+    return {
+        "segments": output,
+        "session_id": session_id,
+        "cefr_level": cefr_level,
+        "cefr_rationale": cefr_rationale,
+        "filename": display_name,
+        "source_url": source_url,
+    }
+
+
+# ── YouTube ──────────────────────────────────────────────────────────────────
+
+# yt-dlp error text that means "you need to be logged in" (members-only,
+# age-restricted, private, or YouTube's "confirm you're not a bot" check).
+LOGIN_REQUIRED_RE = re.compile(r"sign in|log in|login|members|join this channel|cookies|private video", re.I)
+COOKIES_UPLOADED_AT_KEY = "youtube_cookies_uploaded_at"
+MAX_COOKIES_FILE_BYTES = 1_000_000
+
+
+def normalize_youtube_url(url: str) -> str:
+    url = url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Paste a YouTube URL.")
+    if not re.match(r"^https?://", url, re.I):
+        url = "https://" + url
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host not in YOUTUBE_HOSTS:
+        raise HTTPException(status_code=400, detail="Only YouTube URLs are supported (youtube.com or youtu.be).")
+    return url
+
+
+def ytdlp_options(**extra) -> dict:
+    opts = {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True}
+    if YOUTUBE_COOKIES_PATH.exists():
+        opts["cookiefile"] = str(YOUTUBE_COOKIES_PATH)
+    return {**opts, **extra}
+
+
+def youtube_error(e: Exception) -> HTTPException:
+    msg = re.sub(r"\x1b\[[0-9;]*m", "", str(getattr(e, "msg", None) or e))
+    msg = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?", "", msg).strip()
+    if LOGIN_REQUIRED_RE.search(msg):
+        hint = ("Your uploaded cookies may have expired. Upload a fresh cookies.txt in Settings → YouTube."
+                if YOUTUBE_COOKIES_PATH.exists() else
+                "Upload a cookies.txt in Settings → YouTube (hover the ? there for instructions).")
+        return HTTPException(status_code=400, detail=f"YouTube login required. {hint} (YouTube said: {msg})")
+    return HTTPException(status_code=400, detail=f"Could not get the video from YouTube: {msg}")
+
+
+def check_single_video(info: dict) -> None:
+    if info.get("_type") == "playlist":
+        raise HTTPException(status_code=400, detail="That's a playlist link. Paste the URL of a single video.")
+    if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+        raise HTTPException(status_code=400, detail="Live streams and upcoming premieres can't be transcribed.")
+
+
+def download_youtube_audio(url: str, dest_dir: Path) -> tuple[dict, Path]:
+    # Plain bestaudio (usually webm/m4a): Whisper decodes it via ffmpeg, so
+    # converting to mp3 like the download scripts do would only cost time.
+    opts = ytdlp_options(format="bestaudio/best", outtmpl=str(dest_dir / "audio.%(ext)s"))
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            check_single_video(info)
+            ydl.process_ie_result(info, download=True)
+    except yt_dlp.utils.DownloadError as e:
+        raise youtube_error(e)
+    files = [p for p in dest_dir.iterdir() if p.is_file()]
+    if not files:
+        raise HTTPException(status_code=502, detail="YouTube download finished but produced no audio file.")
+    return info, files[0]
+
+
+class YoutubeRequest(BaseModel):
+    url: str
+
+
+@router.get("/youtube-info")
+def get_youtube_info(url: str):
+    url = normalize_youtube_url(url)
+    try:
+        with yt_dlp.YoutubeDL(ytdlp_options()) as ydl:
+            info = ydl.extract_info(url, download=False, process=False)
+    except yt_dlp.utils.DownloadError as e:
+        raise youtube_error(e)
+    check_single_video(info)
+    return {
+        "title": info.get("title") or url,
+        "duration": info.get("duration"),
+        "channel": info.get("channel") or info.get("uploader") or "",
+    }
+
+
+@router.post("/transcribe-url")
+def transcribe_url(req: YoutubeRequest):
+    url = normalize_youtube_url(req.url)
+    with tempfile.TemporaryDirectory() as tmp:
+        info, audio_path = download_youtube_audio(url, Path(tmp))
+        return process_audio(str(audio_path), info.get("title") or url, info.get("webpage_url") or url)
+
+
+def youtube_cookies_status() -> dict:
+    conn = get_db()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (COOKIES_UPLOADED_AT_KEY,)).fetchone()
+    conn.close()
+    uploaded = YOUTUBE_COOKIES_PATH.exists()
+    return {"uploaded": uploaded, "uploaded_at": row["value"] if uploaded and row else None}
+
+
+@router.get("/youtube-cookies")
+def read_youtube_cookies():
+    return youtube_cookies_status()
+
+
+@router.put("/youtube-cookies")
+async def upload_youtube_cookies(file: UploadFile = File(...)):
+    data = await file.read(MAX_COOKIES_FILE_BYTES + 1)
+    if len(data) > MAX_COOKIES_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="That file is too large to be a cookies.txt export.")
+    # Windows exports use CRLF, which yt-dlp on Linux mishandles.
+    data = data.replace(b"\r\n", b"\n")
+
+    # Validate with yt-dlp's own loader before replacing the current file.
+    tmp_path = YOUTUBE_COOKIES_PATH.with_suffix(".upload")
+    tmp_path.write_bytes(data)
+    os.chmod(tmp_path, 0o600)
+    try:
+        jar = yt_dlp.cookies.YoutubeDLCookieJar(str(tmp_path))
+        jar.load()
+        youtube_count = sum(1 for c in jar if c.domain.lstrip(".").endswith("youtube.com"))
+    except Exception as e:
+        print(f"cookies upload rejected: {e!r}")
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail="Not a valid cookies.txt file. It must be in Netscape cookies.txt format (not JSON), "
+                   "starting with a '# Netscape HTTP Cookie File' line.",
+        )
+    if youtube_count == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="That file has no youtube.com cookies. Export it while on a youtube.com tab.")
+    os.replace(tmp_path, YOUTUBE_COOKIES_PATH)
+
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (COOKIES_UPLOADED_AT_KEY, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return youtube_cookies_status()
+
+
+@router.delete("/youtube-cookies")
+def delete_youtube_cookies():
+    YOUTUBE_COOKIES_PATH.unlink(missing_ok=True)
+    conn = get_db()
+    conn.execute("DELETE FROM settings WHERE key = ?", (COOKIES_UPLOADED_AT_KEY,))
+    conn.commit()
+    conn.close()
+    return youtube_cookies_status()
+
+
 @router.get("/sessions")
 def list_sessions():
     conn = get_db()
     rows = conn.execute(
-        "SELECT id, filename, transcribed_at, cefr_level FROM sessions ORDER BY transcribed_at DESC"
+        "SELECT id, filename, transcribed_at, cefr_level, source_url FROM sessions ORDER BY transcribed_at DESC"
     ).fetchall()
     conn.close()
     return {"sessions": [dict(r) for r in rows]}
@@ -294,7 +495,8 @@ def list_sessions():
 def get_session(session_id: int):
     conn = get_db()
     session = conn.execute(
-        "SELECT id, filename, transcribed_at, cefr_level, cefr_rationale FROM sessions WHERE id = ?", (session_id,)
+        "SELECT id, filename, transcribed_at, cefr_level, cefr_rationale, source_url FROM sessions WHERE id = ?",
+        (session_id,),
     ).fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -317,32 +519,7 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        processing_start = time.time()
-        result = whisper_model.transcribe(tmp_path, language="es", task="transcribe")
-        segments = result["segments"]
-
-        if not segments:
-            return {"segments": [], "session_id": None}
-
-        audio_duration_secs = segments[-1]["end"] if segments else None
-
-        translations = translate_segments(segments)
-
-        output = [
-            {
-                "timestamp": f"{format_timestamp(seg['start'])} – {format_timestamp(seg['end'])}",
-                "spanish": seg["text"].strip(),
-                "english": translations[i],
-            }
-            for i, seg in enumerate(segments)
-        ]
-
-        spanish_texts = [s["spanish"] for s in output]
-        cefr_level, cefr_rationale = estimate_cefr(spanish_texts)
-        transcription_secs = time.time() - processing_start
-
-        session_id = save_session(file.filename, output, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs)
-        return {"segments": output, "session_id": session_id, "cefr_level": cefr_level, "cefr_rationale": cefr_rationale}
+        return process_audio(tmp_path, file.filename)
     finally:
         os.unlink(tmp_path)
 

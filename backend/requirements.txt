@@ -6,3 +6,5 @@ openai-whisper
 anthropic
 python-multipart
 python-dotenv
+# [default] adds the YouTube challenge-solver scripts; [deno] installs the JS runtime they need.
+yt-dlp[default,deno]
