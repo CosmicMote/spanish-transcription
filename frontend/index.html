@@ -212,6 +212,19 @@
     /* ── Status ───────────────────────────────────────────────── */
     .status { margin-top: 1.25rem; font-size: 0.9rem; color: #7a5c47; min-height: 1.5rem; }
     .status.error { color: #dc2626; }
+    .pending-item {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.75rem;
+      margin-top: 0.75rem; padding: 0.6rem 0.85rem; font-size: 0.85rem;
+      background: #fdf3ea; border: 1px solid #e8d5c4; border-radius: 8px; color: #7a5c47;
+    }
+    .pending-item .pending-text { flex: 1; min-width: 12rem; }
+    .pending-item .pending-error { display: block; font-size: 0.78rem; color: #b09080; }
+    .pending-item button {
+      padding: 0.3rem 0.8rem; font-size: 0.8rem; border-radius: 6px; cursor: pointer;
+      border: 1px solid #d4b8a4; background: #fff; color: #5a3e2b;
+    }
+    .pending-item button.pending-resume { background: #c0522a; border-color: #c0522a; color: #fff; }
+    .pending-item button:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .spinner {
       display: inline-block;
@@ -523,6 +536,9 @@
     .settings-secondary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .settings-hint { font-size: 0.8rem; color: #b09080; margin-top: 0.3rem; min-height: 1.1em; }
     .settings-hint.error { color: #dc2626; }
+    .settings-hint.ok { color: #15803d; }
+    .settings-test-row { display: flex; align-items: baseline; gap: 0.6rem; margin-top: 0.75rem; }
+    .settings-test-row .settings-hint { margin-top: 0; }
     .settings-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
     #settings-save-btn {
       background: linear-gradient(135deg, #c0522a, #9a3d1e); color: #fff; border: none;
@@ -636,6 +652,7 @@
     </div>
 
     <div class="status" id="status"></div>
+    <div id="pending-list"></div>
 
     <div class="results" id="results" style="display:none">
       <div class="results-header">
@@ -715,6 +732,11 @@
         </div>
       </div>
 
+      <div class="settings-test-row">
+        <button type="button" class="settings-secondary-btn" id="settings-test-btn">Test connection</button>
+        <span class="settings-hint" id="settings-test-result"></span>
+      </div>
+
       <div class="settings-section">
         <h3>YouTube</h3>
         <div class="settings-field">
@@ -779,6 +801,17 @@
 
     function apiUrl(path) {
       return (window.BASE_PATH || '') + path;
+    }
+
+    // Builds an Error from a failed response. Transcription errors may carry
+    // {message, pending_id} when the transcript was kept for resuming.
+    async function responseError(res) {
+      const body = await res.json().catch(() => ({}));
+      const d = body.detail;
+      const msg = d && typeof d === 'object' ? d.message : d;
+      const err = new Error(msg || `Server error ${res.status}`);
+      if (d && d.pending_id) err.pendingId = d.pending_id;
+      return err;
     }
 
     function updateTranscribeEnabled() {
@@ -873,35 +906,15 @@
     }
 
     // ── Transcribe ───────────────────────────────────────────────
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => {
       const f = fileInput.files[0];
       const ytUrl = youtubeUrlInput.value.trim();
       const fromYoutube = sourceMode === 'youtube';
       if (fromYoutube ? !ytUrl : !f) return;
 
-      transcribing = true;
-      updateTranscribeEnabled();
-      results.style.display = 'none';
-      tbody.innerHTML = '';
-      status.className = 'status';
-
-      const action = fromYoutube ? 'Downloading, transcribing, and translating…' : 'Transcribing and translating…';
-      const transcribeStart = Date.now();
-      function updateTimer() {
-        const elapsed = (Date.now() - transcribeStart) / 1000;
-        let msg = `<span class="spinner"></span> ${action} ${formatDuration(elapsed)} elapsed`;
-        if (estimatedTranscriptionSecs !== null) {
-          const remaining = Math.max(0, estimatedTranscriptionSecs - elapsed);
-          msg += ` · ~${formatDuration(remaining)} remaining`;
-        }
-        status.innerHTML = msg;
-      }
-      updateTimer();
-      const timerInterval = setInterval(updateTimer, 1000);
-
       let request;
       if (fromYoutube) {
-        request = fetch(apiUrl('/transcribe-url'), {
+        request = () => fetch(apiUrl('/transcribe-url'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: ytUrl }),
@@ -909,15 +922,36 @@
       } else {
         const form = new FormData();
         form.append('file', f);
-        request = fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
+        request = () => fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
       }
+      const action = fromYoutube ? 'Downloading, transcribing, and translating…' : 'Transcribing and translating…';
+      runTranscription(request, action, (f && f.name) || ytUrl, estimatedTranscriptionSecs);
+    });
+
+    async function runTranscription(request, action, fallbackName, estimateSecs) {
+      transcribing = true;
+      updateTranscribeEnabled();
+      renderPending();
+      results.style.display = 'none';
+      tbody.innerHTML = '';
+      status.className = 'status';
+
+      const transcribeStart = Date.now();
+      function updateTimer() {
+        const elapsed = (Date.now() - transcribeStart) / 1000;
+        let msg = `<span class="spinner"></span> ${action} ${formatDuration(elapsed)} elapsed`;
+        if (estimateSecs !== null) {
+          const remaining = Math.max(0, estimateSecs - elapsed);
+          msg += ` · ~${formatDuration(remaining)} remaining`;
+        }
+        status.innerHTML = msg;
+      }
+      updateTimer();
+      const timerInterval = setInterval(updateTimer, 1000);
 
       try {
-        const res = await request;
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
-          throw new Error(err.detail || `Server error ${res.status}`);
-        }
+        const res = await request();
+        if (!res.ok) throw await responseError(res);
         const data = await res.json();
 
         if (!data.segments || data.segments.length === 0) {
@@ -925,7 +959,7 @@
           return;
         }
 
-        renderSegments(data.segments, data.filename || (f && f.name) || ytUrl, data.session_id,
+        renderSegments(data.segments, data.filename || fallbackName, data.session_id,
                        data.cefr_level, data.cefr_rationale, data.source_url);
         await loadSessions();
         setActiveSession(data.session_id);
@@ -933,10 +967,52 @@
       } catch (e) {
         status.className = 'status error';
         status.textContent = `Error: ${e.message}`;
+        if (e.pendingId) status.textContent += ' The transcript was saved, so you can resume below once the connection is back.';
       } finally {
         clearInterval(timerInterval);
         transcribing = false;
         updateTranscribeEnabled();
+        loadPending();
+      }
+    }
+
+    // ── Unfinished transcriptions (AI step failed; resumable) ─────
+    const pendingList = document.getElementById('pending-list');
+    let pendingItems = [];
+
+    async function loadPending() {
+      try {
+        const res = await fetch(apiUrl('/pending-transcriptions'));
+        if (res.ok) pendingItems = (await res.json()).pending;
+      } catch (_) {}
+      renderPending();
+    }
+
+    function renderPending() {
+      pendingList.innerHTML = pendingItems.map(p => `
+        <div class="pending-item">
+          <span class="pending-text">
+            Unfinished: <strong>${escHtml(p.filename)}</strong>
+            — ${p.translated} of ${p.total} segments translated
+            <span class="pending-error">${escHtml(p.error)}</span>
+          </span>
+          <button class="pending-resume" data-id="${p.id}" ${transcribing ? 'disabled' : ''}>Resume</button>
+          <button class="pending-discard" data-id="${p.id}" ${transcribing ? 'disabled' : ''}>Discard</button>
+        </div>`).join('');
+    }
+
+    pendingList.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b || transcribing) return;
+      const p = pendingItems.find(x => x.id === Number(b.dataset.id));
+      if (!p) return;
+      if (b.classList.contains('pending-resume')) {
+        runTranscription(
+          () => fetch(apiUrl(`/pending-transcriptions/${p.id}/resume`), { method: 'POST' }),
+          'Resuming translation…', p.filename, null);
+      } else if (confirm(`Discard the unfinished transcription of "${p.filename}"?`)) {
+        await fetch(apiUrl(`/pending-transcriptions/${p.id}`), { method: 'DELETE' });
+        loadPending();
       }
     });
 
@@ -1388,7 +1464,10 @@
     const ollamaRefreshBtn = document.getElementById('ollama-refresh-btn');
     const settingsError = document.getElementById('settings-error');
     const settingsSaveBtn = document.getElementById('settings-save-btn');
+    const settingsTestBtn = document.getElementById('settings-test-btn');
+    const settingsTestResult = document.getElementById('settings-test-result');
     let aiSettings = null;
+    let testSeq = 0;
 
     function setAiModelLabel(s) {
       const label = s.provider === 'ollama'
@@ -1414,7 +1493,58 @@
       document.getElementById('anthropic-settings').style.display = p === 'anthropic' ? 'block' : 'none';
       document.getElementById('ollama-settings').style.display = p === 'ollama' ? 'block' : 'none';
       settingsError.textContent = '';
+      clearTestResult();
     }
+
+    // Also invalidates any in-flight test, since its result no longer applies.
+    function clearTestResult() {
+      testSeq++;
+      settingsTestBtn.disabled = false;
+      settingsTestResult.className = 'settings-hint';
+      settingsTestResult.textContent = '';
+    }
+
+    // The provider/model/host currently chosen in the dialog (may be unsaved).
+    function formSettings() {
+      return {
+        provider: selectedProvider(),
+        anthropic_model: anthropicModelSel.value || (aiSettings && aiSettings.anthropic_model) || '',
+        ollama_host: ollamaHostInput.value.trim(),
+        ollama_model: ollamaModelSel.value,
+      };
+    }
+
+    settingsTestBtn.addEventListener('click', async () => {
+      const seq = ++testSeq;
+      const s = formSettings();
+      const model = s.provider === 'ollama' ? s.ollama_model : s.anthropic_model;
+      settingsTestBtn.disabled = true;
+      settingsTestResult.className = 'settings-hint';
+      settingsTestResult.textContent = s.provider === 'ollama'
+        ? `Sending a test prompt to ${model || 'the model'}… (a model's first load can take a while)`
+        : `Sending a test prompt to ${model || 'the model'}…`;
+      try {
+        const res = await fetch(apiUrl('/settings/test'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(s),
+        });
+        if (!res.ok) throw await responseError(res);
+        const data = await res.json();
+        if (seq !== testSeq) return;
+        settingsTestResult.className = 'settings-hint ok';
+        settingsTestResult.textContent = `✓ Connected — ${model} replied in ${data.secs}s.`;
+      } catch (e) {
+        if (seq !== testSeq) return;
+        settingsTestResult.className = 'settings-hint error';
+        settingsTestResult.textContent = `✗ ${e.message}`;
+      } finally {
+        if (seq === testSeq) settingsTestBtn.disabled = false;
+      }
+    });
+    anthropicModelSel.addEventListener('change', clearTestResult);
+    ollamaModelSel.addEventListener('change', clearTestResult);
+    ollamaHostInput.addEventListener('input', clearTestResult);
 
     function fillSelect(sel, options, selected) {
       sel.innerHTML = '';
@@ -1504,12 +1634,7 @@
         const res = await fetch(apiUrl('/settings'), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            provider: selectedProvider(),
-            anthropic_model: anthropicModelSel.value || (aiSettings && aiSettings.anthropic_model) || '',
-            ollama_host: ollamaHostInput.value.trim(),
-            ollama_model: ollamaModelSel.value,
-          }),
+          body: JSON.stringify(formSettings()),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
@@ -1641,6 +1766,7 @@
     loadAiSettings();
     loadSessions();
     loadWordList();
+    loadPending();
   </script>
 </body>
 </html>

@@ -55,6 +55,8 @@ FALLBACK_ANTHROPIC_MODELS = [
 ]
 # Local models can be slow, especially on first load.
 OLLAMA_TIMEOUT_SECS = 600
+# For the settings dialog's "Test connection"; allows for a cold model load.
+OLLAMA_TEST_TIMEOUT_SECS = 120
 
 # Created lazily so the app can start without an API key when using Ollama.
 _claude: anthropic.Anthropic | None = None
@@ -113,6 +115,18 @@ def init_db() -> None:
             session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
             questions TEXT NOT NULL,
             cached_at TEXT NOT NULL
+        );
+        -- Whisper output whose translation/grading failed (e.g. AI provider
+        -- unreachable), kept so it can be resumed without re-transcribing.
+        CREATE TABLE IF NOT EXISTS pending_transcriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            source_url TEXT,
+            segments TEXT NOT NULL,
+            translations TEXT NOT NULL,
+            elapsed_secs REAL NOT NULL,
+            error TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );
     """)
     existing = {r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -179,9 +193,12 @@ def ollama_request(host: str, path: str, payload: dict | None = None, timeout: f
         raise HTTPException(status_code=502, detail=f"Could not reach Ollama at {url}: {reason}")
 
 
-def complete(prompt: str) -> str:
-    """Send a single-turn prompt to the configured AI provider and return its text reply."""
-    settings = get_settings()
+def complete(prompt: str, settings: dict | None = None, ollama_timeout: float = OLLAMA_TIMEOUT_SECS) -> str:
+    """Send a single-turn prompt to the AI provider and return its text reply.
+
+    Uses the saved settings unless `settings` is given (e.g. to test unsaved ones).
+    """
+    settings = settings or get_settings()
     if settings["provider"] == "ollama":
         if not settings["ollama_model"]:
             raise HTTPException(status_code=400, detail="No Ollama model configured. Open AI settings to choose one.")
@@ -193,7 +210,7 @@ def complete(prompt: str) -> str:
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
             },
-            timeout=OLLAMA_TIMEOUT_SECS,
+            timeout=ollama_timeout,
         )
         text = result.get("message", {}).get("content", "")
         # Some reasoning models inline their thinking in the reply.
@@ -212,6 +229,11 @@ def complete(prompt: str) -> str:
         raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}")
     except anthropic.AnthropicError as e:
         raise HTTPException(status_code=500, detail=f"Anthropic client error: {e}")
+    except TypeError as e:
+        # The SDK raises TypeError at request time when no API key is configured.
+        if "authentication" not in str(e):
+            raise
+        raise HTTPException(status_code=500, detail="No Anthropic API key configured. Set the ANTHROPIC_API_KEY environment variable.")
     # Skip thinking blocks; only text blocks hold the answer.
     return "".join(b.text for b in message.content if b.type == "text").strip()
 
@@ -281,51 +303,145 @@ def estimate_cefr(spanish_texts: list[str]) -> tuple[str, str]:
         return "?", ""
 
 
-def translate_segments(segments: list[dict]) -> list[str]:
-    texts = [seg["text"].strip() for seg in segments]
-    all_translations: list[str] = []
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i : i + BATCH_SIZE]
-        all_translations.extend(translate_batch(batch))
-    return all_translations
-
-
 def process_audio(audio_path: str, display_name: str, source_url: str | None = None) -> dict:
     """Transcribe, translate, grade, and save an audio file as a new session."""
     processing_start = time.time()
     result = whisper_model.transcribe(audio_path, language="es", task="transcribe")
-    segments = result["segments"]
+    segments = [{"start": s["start"], "end": s["end"], "text": s["text"].strip()} for s in result["segments"]]
 
     if not segments:
         return {"segments": [], "session_id": None}
 
-    audio_duration_secs = segments[-1]["end"]
+    job = {
+        "filename": display_name,
+        "source_url": source_url,
+        "segments": segments,
+        "translations": [],
+        "elapsed_secs": time.time() - processing_start,
+    }
+    return finish_transcription(job)
 
-    translations = translate_segments(segments)
+
+def finish_transcription(job: dict, pending_id: int | None = None) -> dict:
+    """Translate, grade, and save already-transcribed segments as a new session.
+
+    If an AI step fails, the job (including any batches already translated) is
+    stored as a pending transcription and the error carries its id, so it can
+    be resumed later without downloading or transcribing again.
+    """
+    texts = [seg["text"] for seg in job["segments"]]
+    try:
+        # elapsed_secs only counts work that succeeded, so failed attempts
+        # (which may sit in a long timeout) don't skew transcription estimates.
+        while len(job["translations"]) < len(texts):
+            step_start = time.time()
+            i = len(job["translations"])
+            job["translations"].extend(translate_batch(texts[i : i + BATCH_SIZE]))
+            job["elapsed_secs"] += time.time() - step_start
+        step_start = time.time()
+        cefr_level, cefr_rationale = estimate_cefr(texts)
+        job["elapsed_secs"] += time.time() - step_start
+    except Exception as e:
+        status_code = e.status_code if isinstance(e, HTTPException) else 500
+        message = e.detail if isinstance(e, HTTPException) else f"Unexpected error: {e}"
+        pending_id = save_pending(job, message, pending_id)
+        raise HTTPException(status_code=status_code, detail={"message": message, "pending_id": pending_id}) from e
 
     output = [
         {
             "timestamp": f"{format_timestamp(seg['start'])} – {format_timestamp(seg['end'])}",
-            "spanish": seg["text"].strip(),
-            "english": translations[i],
+            "spanish": seg["text"],
+            "english": job["translations"][i],
         }
-        for i, seg in enumerate(segments)
+        for i, seg in enumerate(job["segments"])
     ]
-
-    spanish_texts = [s["spanish"] for s in output]
-    cefr_level, cefr_rationale = estimate_cefr(spanish_texts)
-    transcription_secs = time.time() - processing_start
-
-    session_id = save_session(display_name, output, cefr_level, cefr_rationale,
-                              audio_duration_secs, transcription_secs, source_url)
+    session_id = save_session(job["filename"], output, cefr_level, cefr_rationale,
+                              job["segments"][-1]["end"], job["elapsed_secs"], job["source_url"])
+    if pending_id is not None:
+        conn = get_db()
+        conn.execute("DELETE FROM pending_transcriptions WHERE id = ?", (pending_id,))
+        conn.commit()
+        conn.close()
     return {
         "segments": output,
         "session_id": session_id,
         "cefr_level": cefr_level,
         "cefr_rationale": cefr_rationale,
-        "filename": display_name,
-        "source_url": source_url,
+        "filename": job["filename"],
+        "source_url": job["source_url"],
     }
+
+
+def save_pending(job: dict, error: str, pending_id: int | None = None) -> int:
+    values = (job["filename"], job["source_url"], json.dumps(job["segments"]),
+              json.dumps(job["translations"]), job["elapsed_secs"], error,
+              datetime.now(timezone.utc).isoformat())
+    conn = get_db()
+    if pending_id is None:
+        pending_id = conn.execute(
+            """INSERT INTO pending_transcriptions
+                   (filename, source_url, segments, translations, elapsed_secs, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            values,
+        ).lastrowid
+    else:
+        conn.execute(
+            """UPDATE pending_transcriptions SET filename = ?, source_url = ?, segments = ?,
+                   translations = ?, elapsed_secs = ?, error = ?, created_at = ?
+               WHERE id = ?""",
+            (*values, pending_id),
+        )
+    conn.commit()
+    conn.close()
+    return pending_id
+
+
+@router.get("/pending-transcriptions")
+def list_pending():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, filename, source_url, segments, translations, error, created_at "
+        "FROM pending_transcriptions ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return {"pending": [
+        {
+            "id": r["id"],
+            "filename": r["filename"],
+            "source_url": r["source_url"],
+            "error": r["error"],
+            "created_at": r["created_at"],
+            "translated": len(json.loads(r["translations"])),
+            "total": len(json.loads(r["segments"])),
+        }
+        for r in rows
+    ]}
+
+
+@router.post("/pending-transcriptions/{pending_id}/resume")
+def resume_pending(pending_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM pending_transcriptions WHERE id = ?", (pending_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="That unfinished transcription no longer exists.")
+    job = {
+        "filename": row["filename"],
+        "source_url": row["source_url"],
+        "segments": json.loads(row["segments"]),
+        "translations": json.loads(row["translations"]),
+        "elapsed_secs": row["elapsed_secs"],
+    }
+    return finish_transcription(job, pending_id)
+
+
+@router.delete("/pending-transcriptions/{pending_id}")
+def delete_pending(pending_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM pending_transcriptions WHERE id = ?", (pending_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 # ── YouTube ──────────────────────────────────────────────────────────────────
@@ -716,20 +832,24 @@ def read_settings():
     return get_settings()
 
 
-@router.put("/settings")
-def update_settings(update: SettingsUpdate):
+def validate_settings(update: SettingsUpdate) -> dict:
     if update.provider not in ("anthropic", "ollama"):
         raise HTTPException(status_code=400, detail="provider must be 'anthropic' or 'ollama'")
     if update.provider == "anthropic" and not update.anthropic_model.strip():
         raise HTTPException(status_code=400, detail="Choose an Anthropic model.")
     if update.provider == "ollama" and not update.ollama_model.strip():
         raise HTTPException(status_code=400, detail="Choose an Ollama model.")
-    values = {
+    return {
         "provider": update.provider,
         "anthropic_model": update.anthropic_model.strip(),
         "ollama_host": normalize_ollama_host(update.ollama_host or DEFAULT_OLLAMA_HOST),
         "ollama_model": update.ollama_model.strip(),
     }
+
+
+@router.put("/settings")
+def update_settings(update: SettingsUpdate):
+    values = validate_settings(update)
     conn = get_db()
     conn.executemany(
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -738,6 +858,17 @@ def update_settings(update: SettingsUpdate):
     conn.commit()
     conn.close()
     return get_settings()
+
+
+@router.post("/settings/test")
+def test_settings(update: SettingsUpdate):
+    """Send a tiny prompt using the given (possibly unsaved) settings."""
+    settings = validate_settings(update)
+    start = time.time()
+    reply = complete("Reply with just the word OK.", settings, ollama_timeout=OLLAMA_TEST_TIMEOUT_SECS)
+    if not reply:
+        raise HTTPException(status_code=502, detail="Connected, but the model returned an empty reply.")
+    return {"secs": round(time.time() - start, 1), "reply": reply[:200]}
 
 
 @router.get("/models/anthropic")
