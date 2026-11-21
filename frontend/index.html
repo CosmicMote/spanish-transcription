@@ -976,7 +976,11 @@
           if (remaining != null) parts.push(remaining > 0 ? `~${formatDuration(remaining)} remaining` : 'almost done');
           else if (p.key !== 'download') parts.push('estimating time remaining…');
           if (p.key === 'download' && p.percent != null) parts.push(`${Math.floor(p.percent)}%`);
-          if (p.key === 'translate' && p.total) parts.push(`step ${Math.min(p.done + 1, p.total)} of ${p.total}`);
+          if (p.key === 'translate' && p.total) {
+            // The last step (after all translation batches) is CEFR grading.
+            const batches = p.total - 1;
+            parts.push(p.done < batches ? `batch ${p.done + 1} of ${batches}` : 'grading difficulty level');
+          }
           detail = parts.join(' · ');
         } else if (p.state === 'done') {
           icon = '✓';
