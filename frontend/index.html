@@ -212,6 +212,16 @@
     /* ── Status ───────────────────────────────────────────────── */
     .status { margin-top: 1.25rem; font-size: 0.9rem; color: #7a5c47; min-height: 1.5rem; }
     .status.error { color: #dc2626; }
+    .phases { margin-top: 1.25rem; font-size: 0.9rem; color: #7a5c47; display: grid; gap: 0.4rem; }
+    .phase { display: flex; align-items: center; gap: 0.5rem; min-height: 1.4rem; }
+    .phase-icon { width: 20px; text-align: center; flex-shrink: 0; }
+    .phase-icon .spinner { margin-right: 0; }
+    .phase-label { font-weight: 600; min-width: 7.5rem; }
+    .phase-detail { color: #9a7c67; }
+    .phase.waiting { color: #b09080; }
+    .phase.waiting .phase-label { font-weight: 500; }
+    .phase.done .phase-icon { color: #2f7d4a; }
+    .phase.failed .phase-icon, .phase.failed .phase-detail { color: #dc2626; }
     .pending-item {
       display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.75rem;
       margin-top: 0.75rem; padding: 0.6rem 0.85rem; font-size: 0.85rem;
@@ -651,6 +661,7 @@
       </table>
     </div>
 
+    <div class="phases" id="phases" hidden></div>
     <div class="status" id="status"></div>
     <div id="pending-list"></div>
 
@@ -793,7 +804,6 @@
     const youtubeDetail = document.getElementById('youtube-detail');
 
     let activeSessionId = null;
-    let estimatedTranscriptionSecs = null;
     let sourceMode = 'file';
     let transcribing = false;
     let estimateSeq = 0;
@@ -822,7 +832,6 @@
     // Clears any shown estimate; returns a token so late async results for a
     // previous file/URL can be discarded.
     function resetEstimate() {
-      estimatedTranscriptionSecs = null;
       if (!transcribing) {
         status.className = 'status';
         status.textContent = '';
@@ -836,7 +845,6 @@
         const res = await fetch(apiUrl(`/transcription-estimate?duration=${durationSecs}`));
         const data = await res.json();
         if (seq !== estimateSeq || transcribing || data.estimated_secs === null) return;
-        estimatedTranscriptionSecs = data.estimated_secs;
         status.textContent = `Estimated transcription time: ~${formatDuration(data.estimated_secs)} (based on ${data.based_on} past session${data.based_on !== 1 ? 's' : ''})`;
       } catch (_) {}
     }
@@ -924,35 +932,128 @@
         form.append('file', f);
         request = () => fetch(apiUrl('/transcribe'), { method: 'POST', body: form });
       }
-      const action = fromYoutube ? 'Downloading, transcribing, and translating…' : 'Transcribing and translating…';
-      runTranscription(request, action, (f && f.name) || ytUrl, estimatedTranscriptionSecs);
+      const phaseKeys = fromYoutube ? ['download', 'transcribe', 'translate'] : ['transcribe', 'translate'];
+      runTranscription(request, phaseKeys, (f && f.name) || ytUrl);
     });
 
-    async function runTranscription(request, action, fallbackName, estimateSecs) {
+    // ── Phase progress (download / transcribe / translate) ───────
+    const phasesEl = document.getElementById('phases');
+    const PHASE_LABELS = { download: 'Downloading', transcribe: 'Transcribing', translate: 'Translating' };
+    let phases = [];
+
+    function phaseRemainingSecs(p, now) {
+      if (p.key === 'download' && p.etaSecs != null) {
+        return p.etaSecs - (now - p.etaAt) / 1000;
+      }
+      if (p.key === 'transcribe' && p.estimateSecs != null) {
+        return p.estimateSecs - (now - p.start) / 1000;
+      }
+      if (p.key === 'translate' && p.done > 0) {
+        // Extrapolate from the steps finished so far in this run.
+        const perStep = (p.progressAt - p.start) / 1000 / p.done;
+        return perStep * (p.total - p.done) - (now - p.progressAt) / 1000;
+      }
+      return null;
+    }
+
+    function renderPhases() {
+      const now = Date.now();
+      phasesEl.innerHTML = phases.map(p => {
+        let icon = '○', detail = 'waiting';
+        if (p.state === 'running') {
+          icon = '<span class="spinner"></span>';
+          const parts = [`${formatDuration((now - p.start) / 1000)} elapsed`];
+          const remaining = phaseRemainingSecs(p, now);
+          if (remaining != null) parts.push(remaining > 0 ? `~${formatDuration(remaining)} remaining` : 'almost done');
+          else if (p.key !== 'download') parts.push('estimating time remaining…');
+          if (p.key === 'download' && p.percent != null) parts.push(`${Math.floor(p.percent)}%`);
+          if (p.key === 'translate' && p.total) parts.push(`step ${Math.min(p.done + 1, p.total)} of ${p.total}`);
+          detail = parts.join(' · ');
+        } else if (p.state === 'done') {
+          icon = '✓';
+          detail = `done in ${formatDuration((p.end - p.start) / 1000)}`;
+        } else if (p.state === 'failed') {
+          icon = '✗';
+          detail = `failed after ${formatDuration((p.end - p.start) / 1000)}`;
+        }
+        return `<div class="phase ${p.state}">
+          <span class="phase-icon">${icon}</span>
+          <span class="phase-label">${PHASE_LABELS[p.key]}</span>
+          <span class="phase-detail">${detail}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function applyPhaseEvent(ev) {
+      const p = phases.find(x => x.key === ev.phase);
+      if (!p) return;
+      const now = Date.now();
+      if (ev.type === 'phase') {
+        p.state = ev.state;
+        if (ev.state === 'running') p.start = now;
+        else p.end = now;
+      } else if (ev.type === 'progress') {
+        if (ev.phase === 'download') {
+          p.etaSecs = ev.eta_secs;
+          p.etaAt = now;
+          p.percent = ev.percent;
+        } else if (ev.phase === 'transcribe') {
+          p.estimateSecs = ev.estimate_secs;
+        } else if (ev.phase === 'translate') {
+          p.done = ev.done;
+          p.total = ev.total;
+          p.progressAt = now;
+        }
+      }
+      renderPhases();
+    }
+
+    // Reads the server's newline-delimited JSON event stream, applying
+    // progress events, and returns the final result's data.
+    async function readJobStream(res) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const ev = JSON.parse(line);
+          if (ev.type === 'result') return ev.data;
+          if (ev.type === 'error') {
+            const err = new Error(ev.message || 'Unknown error');
+            if (ev.pending_id) err.pendingId = ev.pending_id;
+            throw err;
+          }
+          applyPhaseEvent(ev);
+        }
+        if (done) throw new Error('Lost the connection to the server before it finished.');
+      }
+    }
+
+    async function runTranscription(request, phaseKeys, fallbackName) {
       transcribing = true;
       updateTranscribeEnabled();
       renderPending();
       results.style.display = 'none';
       tbody.innerHTML = '';
       status.className = 'status';
+      status.textContent = '';
 
-      const transcribeStart = Date.now();
-      function updateTimer() {
-        const elapsed = (Date.now() - transcribeStart) / 1000;
-        let msg = `<span class="spinner"></span> ${action} ${formatDuration(elapsed)} elapsed`;
-        if (estimateSecs !== null) {
-          const remaining = Math.max(0, estimateSecs - elapsed);
-          msg += ` · ~${formatDuration(remaining)} remaining`;
-        }
-        status.innerHTML = msg;
-      }
-      updateTimer();
-      const timerInterval = setInterval(updateTimer, 1000);
+      phases = phaseKeys.map(key => ({ key, state: 'waiting' }));
+      phasesEl.hidden = false;
+      renderPhases();
+      const timerInterval = setInterval(renderPhases, 1000);
+      let succeeded = false;
 
       try {
         const res = await request();
         if (!res.ok) throw await responseError(res);
-        const data = await res.json();
+        const data = await readJobStream(res);
+        succeeded = true;
 
         if (!data.segments || data.segments.length === 0) {
           status.textContent = 'No speech detected in the audio.';
@@ -968,8 +1069,15 @@
         status.className = 'status error';
         status.textContent = `Error: ${e.message}`;
         if (e.pendingId) status.textContent += ' The transcript was saved, so you can resume below once the connection is back.';
+        // Keep the phase lines up so it's clear which step failed.
+        for (const p of phases) {
+          if (p.state === 'running') { p.state = 'failed'; p.end = Date.now(); }
+        }
       } finally {
         clearInterval(timerInterval);
+        // Hide on success, or if the request failed before any phase started.
+        if (succeeded || phases.every(p => p.state === 'waiting')) phasesEl.hidden = true;
+        else renderPhases();
         transcribing = false;
         updateTranscribeEnabled();
         loadPending();
@@ -1009,7 +1117,7 @@
       if (b.classList.contains('pending-resume')) {
         runTranscription(
           () => fetch(apiUrl(`/pending-transcriptions/${p.id}/resume`), { method: 'POST' }),
-          'Resuming translation…', p.filename, null);
+          ['translate'], p.filename);
       } else if (confirm(`Discard the unfinished transcription of "${p.filename}"?`)) {
         await fetch(apiUrl(`/pending-transcriptions/${p.id}`), { method: 'DELETE' });
         loadPending();

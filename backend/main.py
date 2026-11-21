@@ -1,8 +1,11 @@
 import json
+import math
 import os
+import queue
 import re
 import sqlite3
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +18,7 @@ import whisper
 import yt_dlp
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -140,6 +144,13 @@ def init_db() -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN transcription_secs REAL")
     if "source_url" not in existing:
         conn.execute("ALTER TABLE sessions ADD COLUMN source_url TEXT")
+    # Whisper-only time (transcription_secs also includes translation), used
+    # to estimate the transcription phase on its own.
+    if "whisper_secs" not in existing:
+        conn.execute("ALTER TABLE sessions ADD COLUMN whisper_secs REAL")
+    pending_cols = {r[1] for r in conn.execute("PRAGMA table_info(pending_transcriptions)").fetchall()}
+    if "whisper_secs" not in pending_cols:
+        conn.execute("ALTER TABLE pending_transcriptions ADD COLUMN whisper_secs REAL")
     conn.commit()
     conn.close()
 
@@ -248,14 +259,15 @@ def strip_code_fences(raw: str) -> str:
 
 def save_session(filename: str, segments: list[dict], cefr_level: str = "", cefr_rationale: str = "",
                  audio_duration_secs: float | None = None, transcription_secs: float | None = None,
-                 source_url: str | None = None) -> int:
+                 source_url: str | None = None, whisper_secs: float | None = None) -> int:
     conn = get_db()
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         """INSERT INTO sessions (filename, transcribed_at, cefr_level, cefr_rationale,
-                                 audio_duration_secs, transcription_secs, source_url)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (filename, now, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs, source_url),
+                                 audio_duration_secs, transcription_secs, source_url, whisper_secs)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (filename, now, cefr_level, cefr_rationale, audio_duration_secs, transcription_secs, source_url,
+         whisper_secs),
     )
     session_id = cursor.lastrowid
     conn.executemany(
@@ -307,11 +319,71 @@ def estimate_cefr(spanish_texts: list[str]) -> tuple[str, str]:
         return "?", ""
 
 
-def process_audio(audio_path: str, display_name: str, source_url: str | None = None) -> dict:
-    """Transcribe, translate, grade, and save an audio file as a new session."""
+def no_emit(event: dict) -> None:
+    pass
+
+
+def stream_job(work) -> StreamingResponse:
+    """Run `work(emit)` in a thread, streaming its events as newline-delimited JSON.
+
+    Events: {"type": "phase", "phase": "download"|"transcribe"|"translate",
+    "state": "running"|"done"}, {"type": "progress", "phase": ..., ...} with
+    phase-specific fields, then a final {"type": "result", "data": ...} or
+    {"type": "error", "message": ..., "pending_id": ...}. Errors raised before
+    streaming starts (e.g. bad input) are still returned as normal HTTP errors.
+    The work runs to completion even if the client disconnects.
+    """
+    events: queue.Queue = queue.Queue()
+
+    def run():
+        try:
+            events.put({"type": "result", "data": work(events.put)})
+        except Exception as e:
+            detail = e.detail if isinstance(e, HTTPException) else f"Unexpected error: {e}"
+            if isinstance(detail, dict):
+                events.put({"type": "error", "message": detail.get("message"), "pending_id": detail.get("pending_id")})
+            else:
+                events.put({"type": "error", "message": str(detail), "pending_id": None})
+        finally:
+            events.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def generate():
+        while (event := events.get()) is not None:
+            yield json.dumps(event) + "\n"
+
+    # X-Accel-Buffering stops nginx-style reverse proxies from holding events back.
+    return StreamingResponse(generate(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def estimate_whisper_secs(duration: float) -> float | None:
+    """Expected Whisper time for audio of `duration` seconds, from past sessions."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT audio_duration_secs, whisper_secs FROM sessions WHERE audio_duration_secs > 0 AND whisper_secs > 0"
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return None
+    return duration * sum(r["whisper_secs"] / r["audio_duration_secs"] for r in rows) / len(rows)
+
+
+def process_audio(audio_path: str, display_name: str, source_url: str | None = None, emit=no_emit) -> dict:
+    """Transcribe, translate, grade, and save an audio file as a new session.
+
+    `emit` receives progress events (see stream_job) as each phase runs.
+    """
     processing_start = time.time()
-    result = whisper_model.transcribe(audio_path, language="es", task="transcribe")
+    emit({"type": "phase", "phase": "transcribe", "state": "running"})
+    audio = whisper.load_audio(audio_path)
+    duration = len(audio) / whisper.audio.SAMPLE_RATE
+    emit({"type": "progress", "phase": "transcribe", "estimate_secs": estimate_whisper_secs(duration)})
+    result = whisper_model.transcribe(audio, language="es", task="transcribe")
     segments = [{"start": s["start"], "end": s["end"], "text": s["text"].strip()} for s in result["segments"]]
+    whisper_secs = time.time() - processing_start
+    emit({"type": "phase", "phase": "transcribe", "state": "done"})
 
     if not segments:
         return {"segments": [], "session_id": None}
@@ -321,12 +393,13 @@ def process_audio(audio_path: str, display_name: str, source_url: str | None = N
         "source_url": source_url,
         "segments": segments,
         "translations": [],
-        "elapsed_secs": time.time() - processing_start,
+        "elapsed_secs": whisper_secs,
+        "whisper_secs": whisper_secs,
     }
-    return finish_transcription(job)
+    return finish_transcription(job, emit=emit)
 
 
-def finish_transcription(job: dict, pending_id: int | None = None) -> dict:
+def finish_transcription(job: dict, pending_id: int | None = None, emit=no_emit) -> dict:
     """Translate, grade, and save already-transcribed segments as a new session.
 
     If an AI step fails, the job (including any batches already translated) is
@@ -334,17 +407,25 @@ def finish_transcription(job: dict, pending_id: int | None = None) -> dict:
     be resumed later without downloading or transcribing again.
     """
     texts = [seg["text"] for seg in job["segments"]]
+    # Each remaining translation batch is a step, plus one for CEFR grading.
+    total_steps = math.ceil((len(texts) - len(job["translations"])) / BATCH_SIZE) + 1
+    emit({"type": "phase", "phase": "translate", "state": "running"})
+    emit({"type": "progress", "phase": "translate", "done": 0, "total": total_steps})
     try:
         # elapsed_secs only counts work that succeeded, so failed attempts
         # (which may sit in a long timeout) don't skew transcription estimates.
+        done = 0
         while len(job["translations"]) < len(texts):
             step_start = time.time()
             i = len(job["translations"])
             job["translations"].extend(translate_batch(texts[i : i + BATCH_SIZE]))
             job["elapsed_secs"] += time.time() - step_start
+            done += 1
+            emit({"type": "progress", "phase": "translate", "done": done, "total": total_steps})
         step_start = time.time()
         cefr_level, cefr_rationale = estimate_cefr(texts)
         job["elapsed_secs"] += time.time() - step_start
+        emit({"type": "phase", "phase": "translate", "state": "done"})
     except Exception as e:
         status_code = e.status_code if isinstance(e, HTTPException) else 500
         message = e.detail if isinstance(e, HTTPException) else f"Unexpected error: {e}"
@@ -360,7 +441,8 @@ def finish_transcription(job: dict, pending_id: int | None = None) -> dict:
         for i, seg in enumerate(job["segments"])
     ]
     session_id = save_session(job["filename"], output, cefr_level, cefr_rationale,
-                              job["segments"][-1]["end"], job["elapsed_secs"], job["source_url"])
+                              job["segments"][-1]["end"], job["elapsed_secs"], job["source_url"],
+                              job.get("whisper_secs"))
     if pending_id is not None:
         conn = get_db()
         conn.execute("DELETE FROM pending_transcriptions WHERE id = ?", (pending_id,))
@@ -379,19 +461,20 @@ def finish_transcription(job: dict, pending_id: int | None = None) -> dict:
 def save_pending(job: dict, error: str, pending_id: int | None = None) -> int:
     values = (job["filename"], job["source_url"], json.dumps(job["segments"]),
               json.dumps(job["translations"]), job["elapsed_secs"], error,
-              datetime.now(timezone.utc).isoformat())
+              datetime.now(timezone.utc).isoformat(), job.get("whisper_secs"))
     conn = get_db()
     if pending_id is None:
         pending_id = conn.execute(
             """INSERT INTO pending_transcriptions
-                   (filename, source_url, segments, translations, elapsed_secs, error, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (filename, source_url, segments, translations, elapsed_secs, error, created_at,
+                    whisper_secs)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             values,
         ).lastrowid
     else:
         conn.execute(
             """UPDATE pending_transcriptions SET filename = ?, source_url = ?, segments = ?,
-                   translations = ?, elapsed_secs = ?, error = ?, created_at = ?
+                   translations = ?, elapsed_secs = ?, error = ?, created_at = ?, whisper_secs = ?
                WHERE id = ?""",
             (*values, pending_id),
         )
@@ -435,8 +518,9 @@ def resume_pending(pending_id: int):
         "segments": json.loads(row["segments"]),
         "translations": json.loads(row["translations"]),
         "elapsed_secs": row["elapsed_secs"],
+        "whisper_secs": row["whisper_secs"],
     }
-    return finish_transcription(job, pending_id)
+    return stream_job(lambda emit: finish_transcription(job, pending_id, emit))
 
 
 @router.delete("/pending-transcriptions/{pending_id}")
@@ -494,10 +578,23 @@ def check_single_video(info: dict) -> None:
         raise HTTPException(status_code=400, detail="Live streams and upcoming premieres can't be transcribed.")
 
 
-def download_youtube_audio(url: str, dest_dir: Path) -> tuple[dict, Path]:
+def download_youtube_audio(url: str, dest_dir: Path, emit=no_emit) -> tuple[dict, Path]:
+    last_emit = 0.0
+
+    def on_progress(d: dict) -> None:
+        nonlocal last_emit
+        if d.get("status") != "downloading" or time.time() - last_emit < 0.5:
+            return
+        last_emit = time.time()
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        percent = 100 * d["downloaded_bytes"] / total if total and d.get("downloaded_bytes") else None
+        emit({"type": "progress", "phase": "download", "eta_secs": d.get("eta"), "percent": percent})
+
+    emit({"type": "phase", "phase": "download", "state": "running"})
     # Plain bestaudio (usually webm/m4a): Whisper decodes it via ffmpeg, so
     # converting to mp3 like the download scripts do would only cost time.
-    opts = ytdlp_options(format="bestaudio/best", outtmpl=str(dest_dir / "audio.%(ext)s"))
+    opts = ytdlp_options(format="bestaudio/best", outtmpl=str(dest_dir / "audio.%(ext)s"),
+                         progress_hooks=[on_progress])
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -508,6 +605,7 @@ def download_youtube_audio(url: str, dest_dir: Path) -> tuple[dict, Path]:
     files = [p for p in dest_dir.iterdir() if p.is_file()]
     if not files:
         raise HTTPException(status_code=502, detail="YouTube download finished but produced no audio file.")
+    emit({"type": "phase", "phase": "download", "state": "done"})
     return info, files[0]
 
 
@@ -534,9 +632,13 @@ def get_youtube_info(url: str):
 @router.post("/transcribe-url")
 def transcribe_url(req: YoutubeRequest):
     url = normalize_youtube_url(req.url)
-    with tempfile.TemporaryDirectory() as tmp:
-        info, audio_path = download_youtube_audio(url, Path(tmp))
-        return process_audio(str(audio_path), info.get("title") or url, info.get("webpage_url") or url)
+
+    def work(emit):
+        with tempfile.TemporaryDirectory() as tmp:
+            info, audio_path = download_youtube_audio(url, Path(tmp), emit)
+            return process_audio(str(audio_path), info.get("title") or url, info.get("webpage_url") or url, emit)
+
+    return stream_job(work)
 
 
 def youtube_cookies_status() -> dict:
@@ -638,10 +740,13 @@ async def transcribe(file: UploadFile = File(...)):
         tmp.write(await file.read())
         tmp_path = tmp.name
 
-    try:
-        return process_audio(tmp_path, file.filename)
-    finally:
-        os.unlink(tmp_path)
+    def work(emit):
+        try:
+            return process_audio(tmp_path, file.filename, emit=emit)
+        finally:
+            os.unlink(tmp_path)
+
+    return stream_job(work)
 
 
 @router.get("/transcription-estimate")
