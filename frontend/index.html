@@ -1520,10 +1520,23 @@
       const model = s.provider === 'ollama' ? s.ollama_model : s.anthropic_model;
       settingsTestBtn.disabled = true;
       settingsTestResult.className = 'settings-hint';
-      settingsTestResult.textContent = s.provider === 'ollama'
-        ? `Sending a test prompt to ${model || 'the model'}… (a model's first load can take a while)`
-        : `Sending a test prompt to ${model || 'the model'}…`;
       try {
+        if (s.provider === 'ollama') {
+          // Step 1: quick reachability check (/api/tags), which also confirms the model is installed.
+          settingsTestResult.textContent = `Connecting to ${s.ollama_host || 'Ollama'}…`;
+          const tagsRes = await fetch(apiUrl(`/models/ollama?host=${encodeURIComponent(s.ollama_host)}`));
+          if (!tagsRes.ok) throw await responseError(tagsRes);
+          const tags = await tagsRes.json();
+          if (seq !== testSeq) return;
+          if (model && !tags.models.includes(model)) {
+            throw new Error(`Connected to Ollama, but ${model} isn't installed on this host (use \`ollama pull ${model}\`).`);
+          }
+          // Step 2: a real prompt, which may need to load the model first.
+          settingsTestResult.textContent =
+            `Connected to Ollama. Sending a test prompt to ${model || 'the model'}… (a model's first load can take a while)`;
+        } else {
+          settingsTestResult.textContent = `Sending a test prompt to ${model || 'the model'}…`;
+        }
         const res = await fetch(apiUrl('/settings/test'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

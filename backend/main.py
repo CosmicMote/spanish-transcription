@@ -193,25 +193,29 @@ def ollama_request(host: str, path: str, payload: dict | None = None, timeout: f
         raise HTTPException(status_code=502, detail=f"Could not reach Ollama at {url}: {reason}")
 
 
-def complete(prompt: str, settings: dict | None = None, ollama_timeout: float = OLLAMA_TIMEOUT_SECS) -> str:
+def complete(
+    prompt: str,
+    settings: dict | None = None,
+    ollama_timeout: float = OLLAMA_TIMEOUT_SECS,
+    ollama_think: bool | None = None,
+) -> str:
     """Send a single-turn prompt to the AI provider and return its text reply.
 
     Uses the saved settings unless `settings` is given (e.g. to test unsaved ones).
+    `ollama_think=False` asks Ollama reasoning models to skip thinking.
     """
     settings = settings or get_settings()
     if settings["provider"] == "ollama":
         if not settings["ollama_model"]:
             raise HTTPException(status_code=400, detail="No Ollama model configured. Open AI settings to choose one.")
-        result = ollama_request(
-            settings["ollama_host"],
-            "/api/chat",
-            {
-                "model": settings["ollama_model"],
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-            },
-            timeout=ollama_timeout,
-        )
+        payload = {
+            "model": settings["ollama_model"],
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+        }
+        if ollama_think is not None:
+            payload["think"] = ollama_think
+        result = ollama_request(settings["ollama_host"], "/api/chat", payload, timeout=ollama_timeout)
         text = result.get("message", {}).get("content", "")
         # Some reasoning models inline their thinking in the reply.
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
@@ -865,7 +869,11 @@ def test_settings(update: SettingsUpdate):
     """Send a tiny prompt using the given (possibly unsaved) settings."""
     settings = validate_settings(update)
     start = time.time()
-    reply = complete("Reply with just the word OK.", settings, ollama_timeout=OLLAMA_TEST_TIMEOUT_SECS)
+    # Skip thinking so reasoning models don't spend a long time before replying "OK".
+    reply = complete(
+        "Reply with just the word OK.", settings,
+        ollama_timeout=OLLAMA_TEST_TIMEOUT_SECS, ollama_think=False,
+    )
     if not reply:
         raise HTTPException(status_code=502, detail="Connected, but the model returned an empty reply.")
     return {"secs": round(time.time() - start, 1), "reply": reply[:200]}
