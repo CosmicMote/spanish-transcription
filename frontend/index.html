@@ -956,9 +956,18 @@
       return null;
     }
 
+    // Updates rows in place (rather than rebuilding them every tick) so the
+    // running phase's spinner animation isn't restarted each second.
     function renderPhases() {
       const now = Date.now();
-      phasesEl.innerHTML = phases.map(p => {
+      if (phasesEl.children.length !== phases.length) {
+        phasesEl.innerHTML = phases.map(p => `<div class="phase">
+          <span class="phase-icon"></span>
+          <span class="phase-label">${PHASE_LABELS[p.key]}</span>
+          <span class="phase-detail"></span>
+        </div>`).join('');
+      }
+      phases.forEach((p, i) => {
         let icon = '○', detail = 'waiting';
         if (p.state === 'running') {
           icon = '<span class="spinner"></span>';
@@ -976,12 +985,14 @@
           icon = '✗';
           detail = `failed after ${formatDuration((p.end - p.start) / 1000)}`;
         }
-        return `<div class="phase ${p.state}">
-          <span class="phase-icon">${icon}</span>
-          <span class="phase-label">${PHASE_LABELS[p.key]}</span>
-          <span class="phase-detail">${detail}</span>
-        </div>`;
-      }).join('');
+        const row = phasesEl.children[i];
+        if (row.dataset.state !== p.state) {
+          row.dataset.state = p.state;
+          row.className = `phase ${p.state}`;
+          row.querySelector('.phase-icon').innerHTML = icon;
+        }
+        row.querySelector('.phase-detail').textContent = detail;
+      });
     }
 
     function applyPhaseEvent(ev) {
@@ -1044,6 +1055,7 @@
       status.textContent = '';
 
       phases = phaseKeys.map(key => ({ key, state: 'waiting' }));
+      phasesEl.innerHTML = '';  // fresh rows; a previous run's may have other labels
       phasesEl.hidden = false;
       renderPhases();
       const timerInterval = setInterval(renderPhases, 1000);
